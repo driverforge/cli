@@ -163,7 +163,7 @@ func (m *reviewModel) tabBar() string {
 }
 
 // tabName shortens a path to its base for the tab label, keeping a hint of the
-// parent dir for files like vendor/anvil-sdk.lua.
+// parent dir for files like vendor/driverforge-sdk.lua.
 func tabName(path string) string {
 	parts := strings.Split(filepathToSlash(path), "/")
 	if len(parts) >= 2 {

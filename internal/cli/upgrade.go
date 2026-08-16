@@ -52,7 +52,7 @@ const (
 
 // sdkReleaseNotesURL is the GitHub release page for an SDK version (tags are
 // v-prefixed, e.g. v0.5.0) — the picker's release-notes link.
-const sdkReleaseNotesURL = "https://github.com/driverforge/control4-anvil-sdk/releases/tag/v%s"
+const sdkReleaseNotesURL = "https://github.com/driverforge/control4-sdk/releases/tag/v%s"
 
 // compRow is one row of the upgrade status table. run is set only for components
 // driverforge can actually upgrade (agent, SDK) — the CLI is advisory (a package manager
@@ -342,10 +342,10 @@ func agentRow(ctx context.Context, out io.Writer) compRow {
 	return r
 }
 
-// sdkRow reports the embedded Anvil SDK status for the driver in the working
+// sdkRow reports the embedded Driverforge SDK status for the driver in the working
 // directory. Outside a driver, or one not set up for Driverforge, it's not applicable.
 func sdkRow(ctx context.Context, out io.Writer) compRow {
-	r := compRow{name: "Anvil SDK", current: "—", latest: "—"}
+	r := compRow{name: "Driverforge SDK", current: "—", latest: "—"}
 	proj, err := project.Locate(flagProjectDir)
 	if err != nil {
 		r.state, r.note = stateNA, "not in a driver project"

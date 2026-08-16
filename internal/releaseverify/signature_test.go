@@ -71,13 +71,13 @@ func withTrustedKeys(t *testing.T, signers ...signer) {
 }
 
 func TestVerifyManifestAcceptsTrustedSignatures(t *testing.T) {
-	manifest := []byte(`{"version":"1.2.0","artifacts":[{"name":"anvil-sdk.zip","sha256":"abc"}]}`)
+	manifest := []byte(`{"version":"1.2.0","artifacts":[{"name":"driverforge-sdk.zip","sha256":"abc"}]}`)
 
 	t.Run("accepts a signature from a trusted key", func(t *testing.T) {
 		s := newSigner(t, "release-v1")
 		withTrustedKeys(t, s)
 
-		if err := VerifyManifest("Anvil SDK", manifest, s.sign(t, manifest)); err != nil {
+		if err := VerifyManifest("Driverforge SDK", manifest, s.sign(t, manifest)); err != nil {
 			t.Fatalf("expected the signature to verify, got: %v", err)
 		}
 	})
@@ -87,17 +87,17 @@ func TestVerifyManifestAcceptsTrustedSignatures(t *testing.T) {
 		current := newSigner(t, "release-v2")
 		withTrustedKeys(t, retiring, current)
 
-		if err := VerifyManifest("Anvil SDK", manifest, current.sign(t, manifest)); err != nil {
+		if err := VerifyManifest("Driverforge SDK", manifest, current.sign(t, manifest)); err != nil {
 			t.Fatalf("expected the new key to verify: %v", err)
 		}
-		if err := VerifyManifest("Anvil SDK", manifest, retiring.sign(t, manifest)); err != nil {
+		if err := VerifyManifest("Driverforge SDK", manifest, retiring.sign(t, manifest)); err != nil {
 			t.Fatalf("expected the retiring key to still verify: %v", err)
 		}
 	})
 }
 
 func TestVerifyManifestRefusesUntrustedInput(t *testing.T) {
-	manifest := []byte(`{"version":"1.2.0","artifacts":[{"name":"anvil-sdk.zip","sha256":"abc"}]}`)
+	manifest := []byte(`{"version":"1.2.0","artifacts":[{"name":"driverforge-sdk.zip","sha256":"abc"}]}`)
 
 	t.Run("rejects a signature made by a key we do not hold", func(t *testing.T) {
 		ours := newSigner(t, "release-v1")
@@ -106,7 +106,7 @@ func TestVerifyManifestRefusesUntrustedInput(t *testing.T) {
 		attacker := newSigner(t, "release-v1")
 		withTrustedKeys(t, ours)
 
-		err := VerifyManifest("Anvil SDK", manifest, attacker.sign(t, manifest))
+		err := VerifyManifest("Driverforge SDK", manifest, attacker.sign(t, manifest))
 
 		if err == nil {
 			t.Fatal("expected a forged signature to be refused")
@@ -123,9 +123,9 @@ func TestVerifyManifestRefusesUntrustedInput(t *testing.T) {
 
 		// What a compromised release store would serve: different bytes, with
 		// a sha256 inside them matching its own malicious artifact.
-		tampered := []byte(`{"version":"1.2.0","artifacts":[{"name":"anvil-sdk.zip","sha256":"evil"}]}`)
+		tampered := []byte(`{"version":"1.2.0","artifacts":[{"name":"driverforge-sdk.zip","sha256":"evil"}]}`)
 
-		if err := VerifyManifest("Anvil SDK", tampered, sidecar); err == nil {
+		if err := VerifyManifest("Driverforge SDK", tampered, sidecar); err == nil {
 			t.Fatal("expected a tampered manifest to be refused")
 		}
 	})
@@ -133,7 +133,7 @@ func TestVerifyManifestRefusesUntrustedInput(t *testing.T) {
 	t.Run("rejects a missing signature rather than passing it through", func(t *testing.T) {
 		withTrustedKeys(t, newSigner(t, "release-v1"))
 
-		err := VerifyManifest("Anvil SDK", manifest, nil)
+		err := VerifyManifest("Driverforge SDK", manifest, nil)
 
 		if err == nil {
 			t.Fatal("expected an unsigned manifest to be refused")
@@ -146,7 +146,7 @@ func TestVerifyManifestRefusesUntrustedInput(t *testing.T) {
 	t.Run("rejects a malformed sidecar", func(t *testing.T) {
 		withTrustedKeys(t, newSigner(t, "release-v1"))
 
-		if err := VerifyManifest("Anvil SDK", manifest, []byte("not json")); err == nil {
+		if err := VerifyManifest("Driverforge SDK", manifest, []byte("not json")); err == nil {
 			t.Fatal("expected a malformed sidecar to be refused")
 		}
 	})
@@ -162,7 +162,7 @@ func TestVerifyManifestRefusesUntrustedInput(t *testing.T) {
 		doc.Alg = "none"
 		downgraded, _ := json.Marshal(doc)
 
-		err := VerifyManifest("Anvil SDK", manifest, downgraded)
+		err := VerifyManifest("Driverforge SDK", manifest, downgraded)
 
 		if err == nil {
 			t.Fatal("expected an algorithm downgrade to be refused")
@@ -174,13 +174,13 @@ func TestVerifyManifestRefusesUntrustedInput(t *testing.T) {
 }
 
 func TestVerifyManifestFailsClosed(t *testing.T) {
-	manifest := []byte(`{"version":"1.2.0","artifacts":[{"name":"anvil-sdk.zip","sha256":"abc"}]}`)
+	manifest := []byte(`{"version":"1.2.0","artifacts":[{"name":"driverforge-sdk.zip","sha256":"abc"}]}`)
 
 	t.Run("fails closed when the build embeds no keys", func(t *testing.T) {
 		s := newSigner(t, "release-v1")
 		withTrustedKeys(t)
 
-		err := VerifyManifest("Anvil SDK", manifest, s.sign(t, manifest))
+		err := VerifyManifest("Driverforge SDK", manifest, s.sign(t, manifest))
 
 		if err == nil {
 			t.Fatal("expected a build with no embedded keys to refuse everything")
@@ -192,14 +192,14 @@ func TestVerifyManifestFailsClosed(t *testing.T) {
 }
 
 func TestVerifyManifestErrorsTellTheUserWhatToDo(t *testing.T) {
-	manifest := []byte(`{"version":"1.2.0","artifacts":[{"name":"anvil-sdk.zip","sha256":"abc"}]}`)
+	manifest := []byte(`{"version":"1.2.0","artifacts":[{"name":"driverforge-sdk.zip","sha256":"abc"}]}`)
 
 	t.Run("tells an out-of-date build apart from a forgery", func(t *testing.T) {
 		// A CLI predating the rotation meets a release signed by the new key.
 		future := newSigner(t, "release-v2")
 		withTrustedKeys(t, newSigner(t, "release-v1"))
 
-		err := VerifyManifest("Anvil SDK", manifest, future.sign(t, manifest))
+		err := VerifyManifest("Driverforge SDK", manifest, future.sign(t, manifest))
 
 		if err == nil {
 			t.Fatal("expected an unknown key id to be refused")
@@ -214,7 +214,7 @@ func TestVerifyManifestErrorsTellTheUserWhatToDo(t *testing.T) {
 		withTrustedKeys(t, s)
 		trustedKeys["release-v1"] = "not-a-pem-key"
 
-		err := VerifyManifest("Anvil SDK", manifest, s.sign(t, manifest))
+		err := VerifyManifest("Driverforge SDK", manifest, s.sign(t, manifest))
 
 		if err == nil {
 			t.Fatal("expected a malformed embedded key to error")
@@ -271,7 +271,7 @@ func TestFetchSignature(t *testing.T) {
 		if got != nil {
 			t.Fatalf("expected no sidecar bytes, got %q", got)
 		}
-		if err := VerifyManifest("Anvil SDK", []byte("{}"), got); err == nil {
+		if err := VerifyManifest("Driverforge SDK", []byte("{}"), got); err == nil {
 			t.Fatal("expected the empty sidecar to be refused downstream")
 		}
 	})

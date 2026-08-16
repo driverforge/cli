@@ -19,7 +19,7 @@ import (
 // Decision captures everything the transforms need, resolved by the command
 // layer from the user's choices.
 type Decision struct {
-	SDKBundle    []byte   // anvil-sdk.lua contents to embed
+	SDKBundle    []byte   // driverforge-sdk.lua contents to embed
 	SDKVersion   string   // resolved SDK version (for messaging)
 	ProjectToken string   // identifies the driver to the telemetry pipeline; not a credential
 	BuildTargets bool     // true => scaffold per-build config (config.lua + config.<target>.lua + require('config'))
@@ -27,7 +27,7 @@ type Decision struct {
 	LoggerGlobal string   // existing logger global to forward (e.g. "Log"); "" => none
 }
 
-// tokenArg renders the first argument to Anvil:Init: the project token, which
+// tokenArg renders the first argument to Driverforge:Init: the project token, which
 // identifies the driver to the telemetry pipeline. It authorises nothing, does
 // not expire and cannot be revoked, so it is always inlined and is identical
 // across environments. Build targets exist for per-build config (service URLs,
@@ -36,7 +36,7 @@ func (d Decision) tokenArg() string {
 	return strconv.Quote(d.ProjectToken)
 }
 
-// loggerOpt renders the optional logger option for Anvil:Init.
+// loggerOpt renders the optional logger option for Driverforge:Init.
 func (d Decision) loggerOpt() string {
 	if d.LoggerGlobal == "" {
 		return ""
@@ -44,15 +44,27 @@ func (d Decision) loggerOpt() string {
 	return ", { logger = " + d.LoggerGlobal + " }"
 }
 
+// sdkRequire is the require the patched entry uses to pull in the vendored SDK.
+// The module name must match the squishy Module declaration below verbatim.
+const sdkRequire = "require('vendor.driverforge-sdk')"
+
+// initCall renders the SDK entry point. The driver's filename is not passed:
+// the SDK reads it from C4:GetDriverFileName() itself, so it always names the
+// file actually running rather than a caller-supplied string that could
+// mis-attribute usage.
+func (d Decision) initCall() string {
+	return "Driverforge:Init(" + d.tokenArg() + d.loggerOpt() + ")"
+}
+
 // alreadyPatched reports whether the entry file already wires in the SDK, so a
 // re-run is a no-op rather than a double patch. It looks at code only (comments
-// stripped): a commented-out `-- Anvil:Init(...)` must not make init believe the
-// driver is already wired and skip patching.
+// stripped): a commented-out `-- Driverforge:Init(...)` must not make init believe
+// the driver is already wired and skip patching.
 func alreadyPatched(src []byte) bool {
 	s := string(stripComments(src))
-	return strings.Contains(s, "vendor.anvil-sdk") ||
-		strings.Contains(s, "vendor/anvil-sdk") ||
-		strings.Contains(s, "Anvil:Init")
+	return strings.Contains(s, "vendor.driverforge-sdk") ||
+		strings.Contains(s, "vendor/driverforge-sdk") ||
+		strings.Contains(s, "Driverforge:Init")
 }
 
 var onDriverInitRe = regexp.MustCompile(`function[ \t]+OnDriverInit[ \t]*\(([^)]*)\)`)
@@ -83,8 +95,8 @@ func PatchEntry(src []byte, d Decision) (out []byte, warning string) {
 		// leave a TODO rather than risk mangling the body.
 		var b strings.Builder
 		b.Write(src[:bodyStart])
-		b.WriteString("\n    require('vendor.anvil-sdk')\n")
-		b.WriteString("    Anvil:Init(" + d.tokenArg() + ", C4:GetDriverFileName()" + d.loggerOpt() + ")\n")
+		b.WriteString("\n    " + sdkRequire + "\n")
+		b.WriteString("    " + d.initCall() + "\n")
 		b.WriteString("    -- TODO(driverforge): wrap the rest of this function's body in\n")
 		b.WriteString("    -- Anvil:OnDriverInit(function(strDIR) ... end, strDIR) to defer it.\n")
 		b.Write(src[bodyStart:])
@@ -98,8 +110,8 @@ func PatchEntry(src []byte, d Decision) (out []byte, warning string) {
 	var b strings.Builder
 	b.Write(src[:headerStart])
 	b.WriteString("function OnDriverInit(" + params + ")\n")
-	b.WriteString("    require('vendor.anvil-sdk')\n")
-	b.WriteString("    Anvil:Init(" + d.tokenArg() + ", C4:GetDriverFileName()" + d.loggerOpt() + ")\n\n")
+	b.WriteString("    " + sdkRequire + "\n")
+	b.WriteString("    " + d.initCall() + "\n\n")
 	b.WriteString("    Anvil:OnDriverInit(function(" + innerParam + ")\n")
 	b.WriteString(reindent(body, "    "))
 	b.WriteString("    end" + passArg + ")\n")
@@ -165,8 +177,8 @@ func newOnDriverInit(d Decision) []byte {
 	// is nil normally but a hard error under a strict-globals _G __index — a
 	// common C4 pattern. Mirrors wrapDirArgs' no-parameter case.
 	return []byte("\n\nfunction OnDriverInit(...)\n" +
-		"    require('vendor.anvil-sdk')\n" +
-		"    Anvil:Init(" + d.tokenArg() + ", C4:GetDriverFileName()" + d.loggerOpt() + ")\n\n" +
+		"    " + sdkRequire + "\n" +
+		"    " + d.initCall() + "\n\n" +
 		"    Anvil:OnDriverInit(function(strDIR)\n" +
 		"    end)\nend\n")
 }
@@ -198,7 +210,7 @@ const vendorItem = `<Item type="dir" c4zDir="vendor" name="vendor" recurse="true
 // — the squisher registers each as a package.preload key, and a require that
 // isn't declared here is a driver-load LUA_ERROR on the controller.
 const (
-	squishySDKModule    = `Module "vendor.anvil-sdk" "vendor/anvil-sdk.lua"`
+	squishySDKModule    = `Module "vendor.driverforge-sdk" "vendor/driverforge-sdk.lua"`
 	squishyConfigModule = `Module "config" "config.lua"`
 )
 
@@ -208,7 +220,7 @@ const (
 // declarations (any module name pointing at the file) are left alone.
 func PatchSquishy(src []byte, buildTargets bool) []byte {
 	var add []string
-	if !bytes.Contains(src, []byte(`"vendor/anvil-sdk.lua"`)) {
+	if !bytes.Contains(src, []byte(`"vendor/driverforge-sdk.lua"`)) {
 		add = append(add, squishySDKModule)
 	}
 	if buildTargets && !bytes.Contains(src, []byte(`"config.lua"`)) {

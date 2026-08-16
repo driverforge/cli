@@ -73,7 +73,7 @@ func reviewableChanges(changes []initdriver.Change) (reviewable []initdriver.Cha
 }
 
 func isSDKBundle(rel string) bool {
-	return strings.HasSuffix(filepath.ToSlash(rel), "vendor/anvil-sdk.lua")
+	return strings.HasSuffix(filepath.ToSlash(rel), "vendor/driverforge-sdk.lua")
 }
 
 // reviewCodeChanges presents the given file changes in a tabbed, scrollable
@@ -103,7 +103,7 @@ func confirmPlan(out io.Writer, pp projectPlan, buildTargets bool, branch, commi
 		fmt.Fprintf(out, "  • Create git branch %s\n", branch)
 	}
 	if sdkEmbedded {
-		fmt.Fprintln(out, "  • Embed the Anvil SDK")
+		fmt.Fprintln(out, "  • Embed the Driverforge SDK")
 	}
 	fmt.Fprintf(out, "  • Write %d file change%s\n", fileChanges, plural(fileChanges))
 	if buildTargets {

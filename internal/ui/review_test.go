@@ -4,11 +4,11 @@ import "testing"
 
 func TestTabName(t *testing.T) {
 	cases := map[string]string{
-		"src/driver.lua":           "src/driver.lua",
-		"src/vendor/anvil-sdk.lua": "vendor/anvil-sdk.lua",
-		"src/manifest.c4zproj":     "src/manifest.c4zproj",
-		".driverforge/config.json": ".driverforge/config.json",
-		"driver.lua":               "driver.lua",
+		"src/driver.lua":                 "src/driver.lua",
+		"src/vendor/driverforge-sdk.lua": "vendor/driverforge-sdk.lua",
+		"src/manifest.c4zproj":           "src/manifest.c4zproj",
+		".driverforge/config.json":       ".driverforge/config.json",
+		"driver.lua":                     "driver.lua",
 	}
 	for in, want := range cases {
 		if got := tabName(in); got != want {

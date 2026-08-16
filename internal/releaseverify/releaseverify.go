@@ -1,5 +1,5 @@
 // Package releaseverify enforces the integrity policy for downloaded release
-// artifacts (the Anvil SDK bundle and the on-controller agent). Both are code
+// artifacts (the Driverforge SDK bundle and the on-controller agent). Both are code
 // that runs on the user's driver or controller, so a compromised release store
 // (or a mis-issued cert for it) must not be able to ship unverified bytes.
 //
@@ -27,7 +27,7 @@ import (
 
 // Verify checks a downloaded artifact's computed hex checksum against the
 // expected value from its release manifest. artifact names it for messages
-// (e.g. "Anvil SDK"). A missing or mismatched checksum is always refused.
+// (e.g. "Driverforge SDK"). A missing or mismatched checksum is always refused.
 func Verify(artifact, gotHex, expectedHex string) error {
 	if expectedHex == "" {
 		return fmt.Errorf("%s: release manifest has no sha256 checksum — refusing to install unverified code", artifact)

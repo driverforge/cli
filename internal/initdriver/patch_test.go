@@ -28,11 +28,11 @@ end
 	}
 	s := string(out)
 
-	if !strings.Contains(s, `require('vendor.anvil-sdk')`) {
+	if !strings.Contains(s, `require('vendor.driverforge-sdk')`) {
 		t.Error("missing vendor require")
 	}
-	if !strings.Contains(s, `Anvil:Init("drv_abc", C4:GetDriverFileName(), { logger = Log })`) {
-		t.Errorf("Anvil:Init not rendered as expected:\n%s", s)
+	if !strings.Contains(s, `Driverforge:Init("drv_abc", { logger = Log })`) {
+		t.Errorf("Driverforge:Init not rendered as expected:\n%s", s)
 	}
 	if !strings.Contains(s, "Anvil:OnDriverInit(function(strDIR)") {
 		t.Error("body not wrapped in Anvil:OnDriverInit")
@@ -79,7 +79,7 @@ func TestPatchEntryBuildTargetsAddConfigRequireButStillInlineKey(t *testing.T) {
 	}
 	// The Driverforge key is always inlined — build targets are for other per-build
 	// config, not for routing this (non-secret) key through the CONFIG table.
-	if !strings.Contains(s, `Anvil:Init("drv_k", C4:GetDriverFileName())`) {
+	if !strings.Contains(s, `Driverforge:Init("drv_k")`) {
 		t.Errorf("key should be inlined even with build targets:\n%s", s)
 	}
 	if strings.Contains(s, "CONFIG.DRIVERFORGE_API_KEY") {
@@ -118,7 +118,7 @@ func TestPatchEntryUnbalancedFallsBackWithTodo(t *testing.T) {
 	if !strings.Contains(s, "TODO(driverforge)") {
 		t.Errorf("expected a TODO marker in fallback:\n%s", s)
 	}
-	if !strings.Contains(s, "require('vendor.anvil-sdk')") {
+	if !strings.Contains(s, "require('vendor.driverforge-sdk')") {
 		t.Error("fallback should still wire the SDK require")
 	}
 }
@@ -268,19 +268,19 @@ func TestPatchManifestRewritesOnlyTheDriverTag(t *testing.T) {
 	}
 }
 
-// A commented-out Anvil:Init must not make the driver look already-wired: the
+// A commented-out Driverforge:Init must not make the driver look already-wired: the
 // SDK wiring still gets added.
 func TestPatchEntryCommentedInitIsNotAlreadyPatched(t *testing.T) {
-	src := []byte("-- Anvil:Init(\"old\", C4:GetDriverFileName())\nfunction OnDriverInit()\n    doThing()\nend\n")
+	src := []byte("-- Driverforge:Init(\"old\")\nfunction OnDriverInit()\n    doThing()\nend\n")
 	out, _ := PatchEntry(src, Decision{ProjectToken: "drv_k"})
-	if !bytes.Contains(out, []byte("require('vendor.anvil-sdk')")) {
-		t.Errorf("a commented-out Anvil:Init must not suppress patching:\n%s", out)
+	if !bytes.Contains(out, []byte("require('vendor.driverforge-sdk')")) {
+		t.Errorf("a commented-out Driverforge:Init must not suppress patching:\n%s", out)
 	}
 }
 
-// A real Anvil:Init in code is still detected as already patched (no double patch).
+// A real Driverforge:Init in code is still detected as already patched (no double patch).
 func TestPatchEntryRealInitIsAlreadyPatched(t *testing.T) {
-	src := []byte("function OnDriverInit()\n    Anvil:Init(\"k\", C4:GetDriverFileName())\nend\n")
+	src := []byte("function OnDriverInit()\n    Driverforge:Init(\"k\")\nend\n")
 	out, _ := PatchEntry(src, Decision{ProjectToken: "k"})
 	if !bytes.Equal(out, src) {
 		t.Errorf("an already-wired driver must be left untouched:\n%s", out)
@@ -310,7 +310,7 @@ Output "../dist/driver-squished.lua"
 `)
 	got := string(PatchSquishy(src, true))
 	for _, want := range []string{
-		`Module "vendor.anvil-sdk" "vendor/anvil-sdk.lua"`,
+		`Module "vendor.driverforge-sdk" "vendor/driverforge-sdk.lua"`,
 		`Module "config" "config.lua"`,
 		`Module "lib.log" "lib/log.lua"`,
 	} {
@@ -318,7 +318,7 @@ Output "../dist/driver-squished.lua"
 			t.Errorf("patched squishy missing %q:\n%s", want, got)
 		}
 	}
-	if strings.Index(got, "vendor.anvil-sdk") > strings.Index(got, "Output") {
+	if strings.Index(got, "vendor.driverforge-sdk") > strings.Index(got, "Output") {
 		t.Errorf("modules must be declared before the Output directive:\n%s", got)
 	}
 
@@ -333,7 +333,7 @@ Output "../dist/driver-squished.lua"
 func TestPatchSquishyIdempotent(t *testing.T) {
 	src := []byte(`Main "driver.lua"
 
-Module "vendor.anvil_sdk" "vendor/anvil-sdk.lua"
+Module "vendor.anvil_sdk" "vendor/driverforge-sdk.lua"
 Module "config" "config.lua"
 
 Output "../dist/driver-squished.lua"
@@ -347,7 +347,7 @@ Output "../dist/driver-squished.lua"
 func TestPatchSquishyAppendsWithoutOutput(t *testing.T) {
 	src := []byte("Main \"driver.lua\"\n")
 	got := string(PatchSquishy(src, true))
-	if !strings.Contains(got, `Module "vendor.anvil-sdk"`) || !strings.Contains(got, `Module "config"`) {
+	if !strings.Contains(got, `Module "vendor.driverforge-sdk"`) || !strings.Contains(got, `Module "config"`) {
 		t.Errorf("modules not appended:\n%s", got)
 	}
 }
@@ -356,7 +356,7 @@ func TestPatchSquishyAppendsWithoutOutput(t *testing.T) {
 // squishLua on, so the build needs one.
 func TestNewSquishy(t *testing.T) {
 	got := string(NewSquishy("driver.lua", true))
-	for _, want := range []string{`Main "driver.lua"`, `Module "vendor.anvil-sdk"`, `Module "config" "config.lua"`} {
+	for _, want := range []string{`Main "driver.lua"`, `Module "vendor.driverforge-sdk"`, `Module "config" "config.lua"`} {
 		if !strings.Contains(got, want) {
 			t.Errorf("new squishy missing %q:\n%s", want, got)
 		}

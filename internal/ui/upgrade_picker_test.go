@@ -12,8 +12,8 @@ func upgradeRows() []UpgradeRow {
 	return []UpgradeRow{
 		{Name: "driverforge CLI", Current: "0.4.1", Latest: "0.5.0", Note: "update available", State: UpgradeAvailable},
 		{Name: "Anvil Agent", Current: "2026072104", Note: "up to date", State: UpgradeCurrent},
-		{Name: "Anvil SDK", Current: "0.3.0", Latest: "0.5.0", Note: "update available", State: UpgradeAvailable,
-			NotesURL: "https://github.com/driverforge/control4-anvil-sdk/releases/tag/v0.5.0"},
+		{Name: "Driverforge SDK", Current: "0.3.0", Latest: "0.5.0", Note: "update available", State: UpgradeAvailable,
+			NotesURL: "https://github.com/driverforge/control4-sdk/releases/tag/v0.5.0"},
 	}
 }
 

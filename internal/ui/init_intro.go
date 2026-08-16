@@ -12,9 +12,9 @@ func InitIntro() string {
 	b.WriteString(bodyStyle.Render("This will:"))
 	b.WriteByte('\n')
 	for _, s := range []string{
-		"Embed the Anvil SDK into src/vendor/",
+		"Embed the Driverforge SDK into src/vendor/",
 		"Wrap OnDriverInit so events, errors and logs are captured",
-		"Link this driver to an Driverforge project",
+		"Link this driver to a Driverforge project",
 		"Optionally add build targets (debug / release)",
 	} {
 		b.WriteString(bodyStyle.Render("  • " + s))

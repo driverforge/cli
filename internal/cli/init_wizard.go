@@ -566,7 +566,7 @@ func resolveLoggerGlobal(srcDir, entryRel string) (string, error) {
 
 // luaGlobalRe matches a valid Lua global/field-access name. It guards the
 // user-entered logger name, which is spliced verbatim into generated Lua
-// (Anvil:Init(…, { logger = <name> })) — an unvalidated value could inject code.
+// (Driverforge:Init(…, { logger = <name> })) — an unvalidated value could inject code.
 var luaGlobalRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$`)
 
 // detectLogger returns the conventional logger global used in the entry file

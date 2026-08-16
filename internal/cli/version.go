@@ -85,7 +85,7 @@ func versionGroups() (groups []ui.VersionGroup, dev orgctx.Device, hasDev bool) 
 			groups = append(groups, ui.VersionGroup{
 				ID:   "driver",
 				Name: driver,
-				Rows: []ui.VersionRow{{Label: "Anvil SDK", Value: cfg.SDKVersion}},
+				Rows: []ui.VersionRow{{Label: "Driverforge SDK", Value: cfg.SDKVersion}},
 			})
 		}
 	}

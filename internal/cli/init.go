@@ -120,7 +120,7 @@ func gatherDriverShape(out io.Writer, proj project.Project, bundle []byte, versi
 	}
 
 	// Detect an existing logger to forward; the SDK only forwards logs from a
-	// logger the driver passes to Anvil:Init.
+	// logger the driver passes to Driverforge:Init.
 	dp.logger, err = resolveLoggerGlobal(proj.SrcDir, entryRel)
 	if err != nil {
 		return driverPlan{}, err

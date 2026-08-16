@@ -17,7 +17,7 @@ logs, and errors show up in a dashboard.
 | Component | Language / Runtime | Where it runs | Responsibility |
 |---|---|---|---|
 | **driverforge CLI** | Go (Cobra) | Developer's machine | Build `.c4z`, deploy/sync, `init` (retrofit), auth, project/device management |
-| **Anvil SDK** | Lua 5.1 | Inside each driver, in the Control4 sandbox | Instruments driver event handlers; captures events / logs / errors |
+| **Driverforge SDK** | Lua 5.1 | Inside each driver, in the Control4 sandbox | Instruments driver event handlers; captures events / logs / errors |
 | **Anvil Agent** | Lua 5.1 | On the Control4 controller (a driver itself) | Receives uploads + installs drivers; registers the controller; forwards telemetry |
 | **Graph backend** | NestJS GraphQL + Prisma/Postgres | Cloud | Source of truth: orgs, projects, devices, entitlements/billing |
 | **IDP (Ory)** | Hydra (OAuth2) + Kratos (identity) | Cloud | Issues/validates tokens for CLI and Agent; publishes JWKS |
@@ -42,7 +42,7 @@ flowchart LR
 
   subgraph Controller["Control4 controller (LAN)"]
     AGENT["Anvil Agent (Lua driver)\n• deploy server (HTTPS)\n• MQTT client\n• device registration"]
-    DRV["Customer driver\n+ Anvil SDK (Lua)"]
+    DRV["Customer driver\n+ Driverforge SDK (Lua)"]
   end
 
   CLI -- "device-code login / tokens" --> IDP
@@ -94,7 +94,7 @@ squishy ──────────┘                       ▶ encrypt (opt
 - `credentials.json` *(or OS keychain)* — tokens
 - `context.json` — selected org + device (host/IP + pinned cert fingerprint cached for reachability)
 - `config.json` — anonymous id + telemetry consent
-- `sdk/<version>/anvil-sdk.lua` — cached SDK bundles (local-first; see §6)
+- `sdk/<version>/driverforge-sdk.lua` — cached SDK bundles (local-first; see §6)
 
 **CLI self-telemetry (opt-in, best-effort, never blocks a command):**
 - **Sentry** — crash reporting. **Rule:** anticipated, user-facing conditions are modelled as
@@ -106,7 +106,7 @@ squishy ──────────┘                       ▶ encrypt (opt
 
 ## 3. The SDK (in-driver, Lua)
 
-The SDK is a single squished file (`anvil-sdk.lua`, built from `harness.lua` + `anvil.lua` +
+The SDK is a single squished file (`driverforge-sdk.lua`, built from `harness.lua` + `anvil.lua` +
 `queue.lua` + `stacktrace.lua` + `version.lua`) that `driverforge init` embeds into a driver's
 `src/vendor/`. It is **versioned** (`SDK_VERSION`) and that version is stamped on every payload so
 fleet adoption is trackable.
@@ -114,10 +114,10 @@ fleet adoption is trackable.
 **Public API (what a driver author touches):**
 
 ```lua
-require('vendor.anvil-sdk')
-Anvil:Init(projectToken, C4:GetDriverFileName(), { logger = Log })  -- the project's token
+require('vendor.driverforge-sdk')
+Driverforge:Init(projectToken, { logger = Log })               -- the project's `drv_` token
 Anvil:OnDriverInit(function(strDIR) … end, strDIR)            -- defer instrumented init
--- also: Anvil:SetTimer(...), Anvil:captureError(...)
+-- also: Anvil:SetTimer(...), Anvil:CaptureError(...)
 ```
 
 **What it does at runtime:**
@@ -209,14 +209,14 @@ All three artifacts ship from one manifest-driven store — clients never hard-c
 https://releases.driverforge.com/driverforge-releases/
   driverforge-cli/   latest|v<ver>/manifest.json
   anvil-agent[-dev]/ latest|v<ver>/manifest.json + .c4z
-  anvil-sdk/         latest|v<ver>/manifest.json + anvil-sdk-<ver>.zip
+  driverforge-sdk/   latest|v<ver>/manifest.json + driverforge-sdk-<ver>.zip
 ```
 
 - **CLI** — a one-shot **update *notifier*** (not a self-updater) prints an upgrade hint on a 24h
   cadence (suppressed in CI / non-TTY / dev builds).
 - **Agent** — the `driverforge upgrade` picker resolves the agent build keyed by its *installed filename*
   so an upgrade can't silently switch a controller's environment profile.
-- **SDK** — `driverforge init` is **local-first**: it uses a cached `anvil-sdk.lua` with no network call,
+- **SDK** — `driverforge init` is **local-first**: it uses a cached `driverforge-sdk.lua` with no network call,
   and only fetches a manifest when you explicitly opt to download (latest, or a pinned `x.y.z`).
 - Override the store with `DRIVERFORGE_RELEASES_BASE_URL`. Source mirrors are published to public GitHub
   (via Copybara) for transparency; **Azure is canonical**.

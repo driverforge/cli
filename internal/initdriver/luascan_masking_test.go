@@ -6,7 +6,7 @@ import (
 )
 
 // stripComments blanks comments but must preserve string literals — the checks
-// it feeds match a string argument (require('config'), require('vendor.anvil-sdk')).
+// it feeds match a string argument (require('config'), require('vendor.driverforge-sdk')).
 func TestStripComments(t *testing.T) {
 	src := []byte(`x = "a -- not a comment"  -- real comment
 require('config') -- trailing

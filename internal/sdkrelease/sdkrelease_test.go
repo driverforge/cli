@@ -30,9 +30,9 @@ func TestResolveConstraint(t *testing.T) {
 		wantPath   string
 		wantUser   bool
 	}{
-		{"empty selects latest", "", "/anvil-sdk/latest/manifest.json", false},
-		{"latest keyword", "latest", "/anvil-sdk/latest/manifest.json", false},
-		{"exact pins version", "1.2.3", "/anvil-sdk/v1.2.3/manifest.json", false},
+		{"empty selects latest", "", "/driverforge-sdk/latest/manifest.json", false},
+		{"latest keyword", "latest", "/driverforge-sdk/latest/manifest.json", false},
+		{"exact pins version", "1.2.3", "/driverforge-sdk/v1.2.3/manifest.json", false},
 		{"partial major rejected", "1", "", true},
 		{"partial minor rejected", "1.1", "", true},
 		{"garbage rejected", "banana", "", true},
@@ -56,7 +56,7 @@ func TestResolveConstraint(t *testing.T) {
 	}
 }
 
-// makeZip returns a zip wrapping a single anvil-sdk.lua with the given body.
+// makeZip returns a zip wrapping a single driverforge-sdk.lua with the given body.
 func TestEnsureCachedDownloadsThenServesFromCache(t *testing.T) {
 	const version = "1.0.0"
 	const luaBody = "-- driverforge sdk bundle\nAnvil = {}\n"
@@ -70,14 +70,14 @@ func TestEnsureCachedDownloadsThenServesFromCache(t *testing.T) {
 	sum := sha256.Sum256(zipBytes)
 	zipSHA := hex.EncodeToString(sum[:])
 
-	zipPath := "/anvil-sdk/v" + version + "/anvil-sdk-" + version + ".zip"
+	zipPath := "/driverforge-sdk/v" + version + "/driverforge-sdk-" + version + ".zip"
 
 	// Marshalled once so the same bytes are both served and signed — a
 	// re-encode between the two would reorder keys and break the signature.
 	manifestBody, err := json.Marshal(map[string]any{
 		"version": version,
 		"artifacts": []map[string]any{{
-			"name":   "anvil-sdk-" + version + ".zip",
+			"name":   "driverforge-sdk-" + version + ".zip",
 			"url":    srv.URL + zipPath,
 			"sha256": zipSHA,
 		}},
@@ -88,7 +88,7 @@ func TestEnsureCachedDownloadsThenServesFromCache(t *testing.T) {
 	sign, restore := releaseverify.SigningFixtureForTesting("test-key")
 	defer restore()
 
-	manifestPath := "/anvil-sdk/v" + version + "/manifest.json"
+	manifestPath := "/driverforge-sdk/v" + version + "/manifest.json"
 	mux.HandleFunc(manifestPath, func(w http.ResponseWriter, _ *http.Request) {
 		atomic.AddInt32(&manifestHits, 1)
 		_, _ = w.Write(manifestBody)
@@ -217,7 +217,7 @@ func TestExtractBundleRejectsZipWithoutLua(t *testing.T) {
 	_ = zw.Close()
 
 	if _, err := extractBundle(buf.Bytes()); err == nil {
-		t.Fatal("want error for zip without anvil-sdk.lua")
+		t.Fatal("want error for zip without driverforge-sdk.lua")
 	}
 	if _, err := extractBundle([]byte("not a zip")); err == nil {
 		t.Fatal(fmt.Sprint("want error for non-zip data"))
@@ -234,7 +234,7 @@ func TestEnsureCachedRejectsBadOrMissingChecksum(t *testing.T) {
 		mux := http.NewServeMux()
 		srv := httptest.NewServer(mux)
 		defer srv.Close()
-		zp := "/anvil-sdk/v" + version + "/sdk.zip"
+		zp := "/driverforge-sdk/v" + version + "/sdk.zip"
 		art := map[string]any{"name": "sdk.zip", "url": srv.URL + zp}
 		if sha != "" {
 			art["sha256"] = sha
@@ -245,7 +245,7 @@ func TestEnsureCachedRejectsBadOrMissingChecksum(t *testing.T) {
 		}
 		sign, restore := releaseverify.SigningFixtureForTesting("test-key")
 		defer restore()
-		releaseverify.ServeSignedManifestForTesting(mux, "/anvil-sdk/v"+version+"/manifest.json", manifestBody, sign)
+		releaseverify.ServeSignedManifestForTesting(mux, "/driverforge-sdk/v"+version+"/manifest.json", manifestBody, sign)
 		mux.HandleFunc(zp, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(zipBytes) })
 
 		t.Setenv("DRIVERFORGE_RELEASES_BASE_URL", srv.URL)
@@ -273,7 +273,7 @@ func TestResolveRequiresASignedManifest(t *testing.T) {
 		sign, restore := releaseverify.SigningFixtureForTesting("test-key")
 		t.Cleanup(restore)
 		mux := http.NewServeMux()
-		path := "/anvil-sdk/v" + version + "/manifest.json"
+		path := "/driverforge-sdk/v" + version + "/manifest.json"
 		mux.HandleFunc(path, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(manifest) })
 		if serveSig {
 			mux.HandleFunc(path+".sig", func(w http.ResponseWriter, _ *http.Request) {

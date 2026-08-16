@@ -52,10 +52,10 @@ func TestPlanInlineMode(t *testing.T) {
 
 	if c := changeByRel(res, "src/driver.lua"); c == nil {
 		t.Error("expected driver.lua change")
-	} else if !strings.Contains(string(c.New), `Anvil:Init("drv_xyz"`) {
+	} else if !strings.Contains(string(c.New), `Driverforge:Init("drv_xyz"`) {
 		t.Errorf("inline key not in entry:\n%s", c.New)
 	}
-	if c := changeByRel(res, "src/vendor/anvil-sdk.lua"); c == nil || c.Kind != Create {
+	if c := changeByRel(res, "src/vendor/driverforge-sdk.lua"); c == nil || c.Kind != Create {
 		t.Error("expected vendor SDK create")
 	}
 	if c := changeByRel(res, "src/manifest.c4zproj"); c == nil {
@@ -94,7 +94,7 @@ func TestPlanBuildTargetsMode(t *testing.T) {
 	// The Driverforge key is always inlined, even with build targets — it never routes
 	// through the CONFIG table.
 	c := changeByRel(res, "src/driver.lua")
-	if c == nil || !strings.Contains(string(c.New), `Anvil:Init("drv_xyz"`) {
+	if c == nil || !strings.Contains(string(c.New), `Driverforge:Init("drv_xyz"`) {
 		t.Errorf("build-target entry should still inline the key:\n%v", c)
 	}
 	if c != nil && strings.Contains(string(c.New), "CONFIG.DRIVERFORGE_API_KEY") {

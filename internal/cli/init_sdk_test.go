@@ -30,7 +30,7 @@ func isolateSDKCache(t *testing.T, versions ...string) string {
 		if err := os.MkdirAll(p, 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(p, "anvil-sdk.lua"), []byte("-- sdk "+v), 0o600); err != nil {
+		if err := os.WriteFile(filepath.Join(p, "driverforge-sdk.lua"), []byte("-- sdk "+v), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -44,7 +44,7 @@ func TestResolveSDKPrefersStoreLatest(t *testing.T) {
 	isolateSDKCache(t, "0.3.0", "0.6.0")
 	sign, restore := releaseverify.SigningFixtureForTesting("test-key")
 	t.Cleanup(restore)
-	manifest := []byte(`{"version":"0.6.0","artifacts":[{"name":"anvil-sdk-0.6.0.zip","url":"https://unused.example/x.zip","sha256":"00"}]}`)
+	manifest := []byte(`{"version":"0.6.0","artifacts":[{"name":"driverforge-sdk-0.6.0.zip","url":"https://unused.example/x.zip","sha256":"00"}]}`)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "manifest.json.sig") {
 			w.Write(sign(manifest))

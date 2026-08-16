@@ -1,9 +1,9 @@
-// Package sdkrelease resolves and caches the Anvil SDK bundle (anvil-sdk.lua)
+// Package sdkrelease resolves and caches the Driverforge SDK bundle (driverforge-sdk.lua)
 // that `driverforge init` embeds into a driver's source tree.
 //
 // The SDK is published to the same release store the agent uses
-// (https://releases.driverforge.com/driverforge-releases/anvil-sdk/<v|latest>/), as a
-// zip wrapping a single anvil-sdk.lua, alongside a manifest.json. Resolved
+// (https://releases.driverforge.com/driverforge-releases/driverforge-sdk/<v|latest>/), as a
+// zip wrapping a single driverforge-sdk.lua, alongside a manifest.json. Resolved
 // bundles are cached per-version under the user config dir so repeat inits and
 // re-runs don't re-download.
 //
@@ -36,18 +36,17 @@ import (
 	"github.com/driverforge/cli/internal/clierr"
 )
 
-// defaultBaseURL is the release-store root; the SDK lives under <root>/anvil-sdk.
+// defaultBaseURL is the release-store root; the SDK lives under <root>/driverforge-sdk.
 // It shares the driverforge-releases namespace (and override env) with agentrelease.
 const defaultBaseURL = "https://releases.driverforge.com/driverforge-releases"
 
-// artifactPath is the SDK's directory within the release store. The SDK keeps
-// its original "anvil-sdk" name (its own publish pipeline, plus the
-// vendor/anvil-sdk.lua path already embedded in initialised drivers); it was
-// deliberately left out of the CLI's anvil→driverforge rename.
-const artifactPath = "anvil-sdk"
+// artifactPath is the SDK's directory within the release store. It follows the
+// SDK's own rename (DF-915): the publish pipeline writes under driverforge-sdk,
+// and the bundle init embeds is vendor/driverforge-sdk.lua.
+const artifactPath = "driverforge-sdk"
 
 // bundleName is the Lua file inside each release zip (and the cached filename).
-const bundleName = "anvil-sdk.lua"
+const bundleName = "driverforge-sdk.lua"
 
 // downloadClient bounds the manifest + zip fetches; the bundle is tens of KB.
 var downloadClient = &http.Client{Timeout: 60 * time.Second}
@@ -60,7 +59,7 @@ var (
 // Release is a resolved SDK build available to download.
 type Release struct {
 	Version string // concrete version, e.g. "1.0.0"
-	ZipURL  string // download URL of the zip wrapping anvil-sdk.lua
+	ZipURL  string // download URL of the zip wrapping driverforge-sdk.lua
 	ZipName string // zip filename (informational)
 	SHA256  string // hex sha256 of the zip, from the manifest ("" if absent)
 }
@@ -129,7 +128,7 @@ func Resolve(ctx context.Context, constraint string) (Release, error) {
 	if resp.StatusCode == http.StatusNotFound {
 		return Release{}, &clierr.UserError{
 			Title:   "SDK version not found",
-			Message: "that Anvil SDK version isn't published",
+			Message: "that Driverforge SDK version isn't published",
 			Hint:    "check the version, or omit --sdk-version for the latest",
 		}
 	}
@@ -148,7 +147,7 @@ func Resolve(ctx context.Context, constraint string) (Release, error) {
 	if err != nil {
 		return Release{}, err
 	}
-	if err := releaseverify.VerifyManifest("Anvil SDK", raw, signature); err != nil {
+	if err := releaseverify.VerifyManifest("Driverforge SDK", raw, signature); err != nil {
 		return Release{}, err
 	}
 
@@ -269,7 +268,7 @@ func compareVersions(a, b string) int {
 }
 
 // EnsureCached resolves the constraint and returns the local path to the cached
-// anvil-sdk.lua, downloading and extracting it if absent. For an exact version
+// driverforge-sdk.lua, downloading and extracting it if absent. For an exact version
 // that is already cached it skips the network entirely.
 func EnsureCached(ctx context.Context, constraint string) (path, version string, err error) {
 	// Fast path: an exact, already-cached version needs no manifest fetch.
@@ -300,7 +299,7 @@ func EnsureCached(ctx context.Context, constraint string) (path, version string,
 	return dest, rel.Version, nil
 }
 
-// download fetches the release zip, extracts anvil-sdk.lua, and writes it to dest
+// download fetches the release zip, extracts driverforge-sdk.lua, and writes it to dest
 // atomically (temp file + rename) so a partial download never poisons the cache.
 func download(ctx context.Context, rel Release, dest string) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rel.ZipURL, nil)
@@ -325,7 +324,7 @@ func download(ctx context.Context, rel Release, dest string) error {
 	// Verify the downloaded zip against the manifest checksum before trusting
 	// its contents — the SDK is embedded into every driver built with driverforge.
 	sum := sha256.Sum256(raw)
-	if err := releaseverify.Verify("Anvil SDK", hex.EncodeToString(sum[:]), rel.SHA256); err != nil {
+	if err := releaseverify.Verify("Driverforge SDK", hex.EncodeToString(sum[:]), rel.SHA256); err != nil {
 		return err
 	}
 
@@ -337,7 +336,7 @@ func download(ctx context.Context, rel Release, dest string) error {
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(dest), ".anvil-sdk-*.tmp")
+	tmp, err := os.CreateTemp(filepath.Dir(dest), ".driverforge-sdk-*.tmp")
 	if err != nil {
 		return err
 	}
@@ -359,7 +358,7 @@ func download(ctx context.Context, rel Release, dest string) error {
 	return nil
 }
 
-// extractBundle pulls anvil-sdk.lua out of the release zip.
+// extractBundle pulls driverforge-sdk.lua out of the release zip.
 func extractBundle(zipData []byte) ([]byte, error) {
 	zr, err := zip.NewReader(bytes.NewReader(zipData), int64(len(zipData)))
 	if err != nil {

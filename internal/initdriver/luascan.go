@@ -57,7 +57,7 @@ func longSpans(src []byte) [][2]int {
 // stripComments returns a copy of src with every comment (line and long)
 // replaced by spaces, newlines preserved. String literals are left intact: the
 // presence checks it feeds — alreadyPatched, ensureConfigRequire — legitimately
-// match a *string argument* (require('vendor.anvil-sdk'), require('config')), so
+// match a *string argument* (require('vendor.driverforge-sdk'), require('config')), so
 // blanking strings would hide the real construct (and, for alreadyPatched, make
 // an already-wired driver look unpatched and get double-patched). Only a
 // commented-out copy should stop counting. Byte offsets/line numbers are

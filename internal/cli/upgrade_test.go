@@ -46,8 +46,8 @@ func TestBuildUpgradeRows(t *testing.T) {
 	rows := []compRow{
 		{name: "driverforge CLI", current: "0.4.1", latest: "0.5.0", note: "update available", state: stateUpdate},
 		{name: "Anvil Agent", detail: "core1-000FFF9C4F48", current: "2026072104", latest: "2026072201", note: "update available", state: stateUpdate},
-		{name: "Anvil SDK", current: "0.3.0", latest: "0.5.0", note: "update available", state: stateUpdate,
-			notesURL: "https://github.com/driverforge/control4-anvil-sdk/releases/tag/v0.5.0"},
+		{name: "Driverforge SDK", current: "0.3.0", latest: "0.5.0", note: "update available", state: stateUpdate,
+			notesURL: "https://github.com/driverforge/control4-sdk/releases/tag/v0.5.0"},
 		{name: "Anvil Agent", note: "no controller selected", state: stateNA},
 	}
 	got := buildUpgradeRows(rows)

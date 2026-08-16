@@ -59,7 +59,7 @@ func handleAlreadyInit(out io.Writer, proj project.Project, cfg *driverforgeconf
 	return nil
 }
 
-// runSDKUpdate re-embeds the Anvil SDK at the version resolved from constraint
+// runSDKUpdate re-embeds the Driverforge SDK at the version resolved from constraint
 // (empty/"latest" → the newest published; an exact x.y.z → that build) and bumps
 // .driverforge/config.json. It is the engine behind the `driverforge upgrade`
 // picker's SDK row — selecting the row there is the consent, so it prompts for
@@ -91,7 +91,7 @@ func runSDKUpdate(ctx context.Context, out io.Writer, proj project.Project, cfg 
 	}
 
 	var changes []initdriver.Change
-	vendorCh, ok, err := fileChange(proj.Dir, filepath.Join(proj.SrcDir, "vendor", "anvil-sdk.lua"), bundle)
+	vendorCh, ok, err := fileChange(proj.Dir, filepath.Join(proj.SrcDir, "vendor", "driverforge-sdk.lua"), bundle)
 	if err != nil {
 		return err
 	}
@@ -106,14 +106,14 @@ func runSDKUpdate(ctx context.Context, out io.Writer, proj project.Project, cfg 
 		changes = append(changes, cfgCh)
 	}
 	if len(changes) == 0 {
-		fmt.Fprintf(out, "\n%s\n", ui.Success(fmt.Sprintf("Already on Anvil SDK %s — nothing to update.", target)))
+		fmt.Fprintf(out, "\n%s\n", ui.Success(fmt.Sprintf("Already on Driverforge SDK %s — nothing to update.", target)))
 		return nil
 	}
 
 	if err := executeFileChanges(ctx, out, proj, "", changes); err != nil {
 		return err
 	}
-	fmt.Fprintf(out, "\n%s\n", ui.Celebrate(fmt.Sprintf("Updated to Anvil SDK %s!", target)))
+	fmt.Fprintf(out, "\n%s\n", ui.Celebrate(fmt.Sprintf("Updated to Driverforge SDK %s!", target)))
 	return nil
 }
 
@@ -130,13 +130,13 @@ func resolveSDKTarget(ctx context.Context, out io.Writer, constraint string) (st
 		return c, nil
 	}
 	var version string
-	err := ui.WaitFor(ctx, out, ui.Interactive(flagNoTUI), "Checking for the latest Anvil SDK…", func() (string, error) {
+	err := ui.WaitFor(ctx, out, ui.Interactive(flagNoTUI), "Checking for the latest Driverforge SDK…", func() (string, error) {
 		rel, e := sdkrelease.Resolve(ctx, "latest")
 		if e != nil {
 			return "", e
 		}
 		version = rel.Version
-		return "Latest Anvil SDK: " + rel.Version, nil
+		return "Latest Driverforge SDK: " + rel.Version, nil
 	})
 	if err != nil {
 		return "", err
@@ -157,10 +157,10 @@ func fetchSDK(ctx context.Context, out io.Writer, version string) ([]byte, error
 		if err != nil {
 			return nil, err
 		}
-		fmt.Fprintf(out, "\n%s\n", ui.Success("Using installed Anvil SDK "+version))
+		fmt.Fprintf(out, "\n%s\n", ui.Success("Using installed Driverforge SDK "+version))
 		return bundle, nil
 	}
-	p, _, err := downloadSDK(ctx, out, version, fmt.Sprintf("Downloading Anvil SDK %s…", version))
+	p, _, err := downloadSDK(ctx, out, version, fmt.Sprintf("Downloading Driverforge SDK %s…", version))
 	if err != nil {
 		return nil, err
 	}
@@ -185,7 +185,7 @@ func loadSDK(ctx context.Context, out io.Writer) (bundle []byte, version string,
 	// A fresh download already announced itself via the spinner's ✓ line; only
 	// the cached case needs a line here.
 	if cached {
-		fmt.Fprintf(out, "\n%s\n", ui.Success(fmt.Sprintf("Using installed Anvil SDK %s (latest)", version)))
+		fmt.Fprintf(out, "\n%s\n", ui.Success(fmt.Sprintf("Using installed Driverforge SDK %s (latest)", version)))
 	}
 	return bundle, version, nil
 }
@@ -207,11 +207,11 @@ func resolveSDK(ctx context.Context, out io.Writer) (path, version string, cache
 		// Store unreachable — offline init still works from the cache, but say
 		// so: the cached bundle may lag the actual latest.
 		if v, p, ok, cerr := sdkrelease.NewestCached(); cerr == nil && ok {
-			fmt.Fprintf(out, "\n%s\n", ui.Warning(fmt.Sprintf("couldn't reach the release store — using installed Anvil SDK %s (run `driverforge upgrade` later to check for updates)", v)))
+			fmt.Fprintf(out, "\n%s\n", ui.Warning(fmt.Sprintf("couldn't reach the release store — using installed Driverforge SDK %s (run `driverforge upgrade` later to check for updates)", v)))
 			return p, v, false, nil // false: the warning already announced it
 		}
-		return "", "", false, clierr.WrapT(rerr, "Anvil SDK unavailable",
-			"couldn't reach the release store and no Anvil SDK is installed locally",
+		return "", "", false, clierr.WrapT(rerr, "Driverforge SDK unavailable",
+			"couldn't reach the release store and no Driverforge SDK is installed locally",
 			"check your connection and re-run `driverforge init`")
 	}
 
@@ -223,7 +223,7 @@ func resolveSDK(ctx context.Context, out io.Writer) (path, version string, cache
 		return p, rel.Version, true, nil
 	}
 	ok, err := ui.Confirm(
-		fmt.Sprintf("Anvil SDK %s isn't installed locally. Download it now?", rel.Version),
+		fmt.Sprintf("Driverforge SDK %s isn't installed locally. Download it now?", rel.Version),
 		"Fetched from releases.driverforge.com into your local cache.", true)
 	if err != nil {
 		return "", "", false, err
@@ -231,7 +231,7 @@ func resolveSDK(ctx context.Context, out io.Writer) (path, version string, cache
 	if !ok {
 		return "", "", false, sdkDownloadDeclined()
 	}
-	p, v, err := downloadSDK(ctx, out, rel.Version, fmt.Sprintf("Downloading Anvil SDK %s…", rel.Version))
+	p, v, err := downloadSDK(ctx, out, rel.Version, fmt.Sprintf("Downloading Driverforge SDK %s…", rel.Version))
 	return p, v, false, err
 }
 
@@ -244,7 +244,7 @@ func downloadSDK(ctx context.Context, out io.Writer, constraint, label string) (
 			return "", e
 		}
 		path, version = p, v
-		return fmt.Sprintf("Downloaded Anvil SDK %s", v), nil
+		return fmt.Sprintf("Downloaded Driverforge SDK %s", v), nil
 	})
 	if werr != nil {
 		return "", "", werr
@@ -256,8 +256,8 @@ func downloadSDK(ctx context.Context, out io.Writer, constraint, label string) (
 // init can't proceed without an SDK to embed.
 func sdkDownloadDeclined() error {
 	return &clierr.UserError{
-		Title:   "Anvil SDK required",
-		Message: "driverforge init needs the Anvil SDK to continue",
+		Title:   "Driverforge SDK required",
+		Message: "driverforge init needs the Driverforge SDK to continue",
 		Hint:    "re-run and allow the download",
 	}
 }

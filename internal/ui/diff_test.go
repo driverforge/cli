@@ -38,7 +38,7 @@ func TestRenderFileDiffLargeNewFileSummarised(t *testing.T) {
 	for i := 0; i < createPreviewMax+10; i++ {
 		lines = append(lines, "line")
 	}
-	out := RenderFileDiff("src/vendor/anvil-sdk.lua", nil, []byte(strings.Join(lines, "\n")+"\n"))
+	out := RenderFileDiff("src/vendor/driverforge-sdk.lua", nil, []byte(strings.Join(lines, "\n")+"\n"))
 	if !strings.Contains(out, "contents omitted") {
 		t.Errorf("expected large new file to be summarised: %s", out)
 	}
