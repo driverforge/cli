@@ -1,0 +1,62 @@
+config_version = "0"
+
+# qlty is used purely for the code-quality (maintainability) signal: cognitive
+# complexity, duplication, deep nesting, long parameter lists. These smells are
+# built into qlty and run by default on Go — no plugin is required.
+#
+# Formatting and correctness are owned by gofmt and go vet (see ci.yml), NOT
+# qlty. Nothing here should overlap with them.
+#
+# The gate runs from the CLI in .github/workflows/qlty.yml; `make qlty`
+# reproduces it exactly. Docs: https://docs.qlty.sh/code-smells
+
+# Fixtures and vendored/packaging trees are not maintained as code — their
+# smells are the fixture's shape, not debt a reviewer can act on.
+exclude_patterns = [
+  "testdata/**", # golden files and driver fixtures
+  "dist/**",     # build output
+  "contrib/**",  # Homebrew/scoop tap templates and shell integrations
+]
+
+[[source]]
+name = "default"
+default = true
+
+# Thresholds (lower = stricter). These gate every smell in a file a PR changed,
+# not only newly-written lines: editing a file makes its debt the author's to
+# clean up. Untouched files are never reported, so the backlog is only paid down
+# by people already in the neighbourhood.
+#
+# Calibrated against a whole-repo scan at adoption rather than guessed. qlty's
+# defaults produced 138 findings here, dominated by idiomatic Go: `if err != nil
+# { return ... }` chains make high return counts normal, and the default of 6
+# flagged 63 functions. The values below leave 28 findings — the genuine
+# outliers (pkg/c4z Build at complexity 77, internal/cli runSyncFramed at 50,
+# deploy.go's file total at 142) rather than every error-handling chain.
+#
+# Ratchet down over time as those are paid off.
+
+[smells.function_complexity] # cognitive complexity per function
+threshold = 35               # default 18; Go command handlers sit at 18-30
+
+[smells.return_statements] # early-return error handling is idiomatic Go
+threshold = 15             # default 6, which flagged 63 functions here
+
+[smells.file_complexity] # total complexity per file
+threshold = 130          # default 50
+
+[smells.function_parameters]
+threshold = 9 # default 6; the build/deploy plumbing threads real config
+
+# Duplication and boolean_logic are left at qlty's defaults deliberately.
+#
+# DO NOT "tune" the duplication thresholds without re-measuring. Their unit is
+# NOT the `mass = N` reported in the finding message: raising either past ~29
+# silently drops duplication detection to zero findings, including blocks with a
+# reported mass of 142. That reads like calibration but is switching the check
+# off. Verified empirically at adoption across 15/30/50/80/120.
+#
+# [smells.identical_code]      # default 15
+# [smells.similar_code]        # default 15
+# [smells.boolean_logic]       # default 4
+# [smells.nested_control_flow] # default 5

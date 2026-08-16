@@ -1,0 +1,18 @@
+# Build output
+/driverforge
+/driverforge-dev
+/dist/
+*.c4z
+*.lua.map
+
+# Go
+/vendor/
+
+# OS
+.DS_Store
+
+# Coverage
+coverage.out
+
+# Qlty gate output (scripts/qlty-gate.js --out-dir)
+/reports/

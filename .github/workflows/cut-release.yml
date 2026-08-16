@@ -1,0 +1,118 @@
+name: Cut release
+# Surface what was entered in the run list ("patch" or an exact version) —
+# the resolved version can't appear here (run-name is evaluated before the
+# job computes it), but the Release run it dispatches is named by its tag.
+run-name: "Cut release (${{ inputs.version }})"
+
+# Dispatch-driven release entry point: pick a bump type (or an exact version) and
+# this runs the checks, creates the tag if it doesn't exist, and starts the
+# release for it — so cutting a release no longer means creating and pushing a
+# tag by hand.
+#
+# The tag is pushed with the workflow's own GITHUB_TOKEN. Such pushes
+# deliberately trigger no downstream workflows, so the job then dispatches
+# release.yml for the tag explicitly. No app credentials are used here: the
+# driverforge-bot key stays confined to release.yml.
+#
+# When a release fails part-way, cut the next patch version rather than re-running
+# the tag. GitHub releases are immutable, so a second run cannot re-upload the
+# assets of one already published, and a dispatch runs the workflow from the tag
+# rather than from main — so neither the artifacts nor the fix land. See the
+# workflow_dispatch comment in release.yml.
+#
+# Prerelease (X.Y.Z-rc1) versions are intentionally NOT accepted: the release
+# pipeline doesn't yet skip the tap/bucket/latest pointers for them (unlike
+# gayle's), so an rc would ship to the public tap and advance "latest".
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version bump type (patch, minor, major) or an exact version (e.g. 0.2.0)"
+        required: true
+        default: "patch"
+        type: string
+
+permissions:
+  contents: write # push the release tag
+  actions: write # dispatch release.yml
+
+jobs:
+  tag:
+    # Tags that start a release belong on the PUBLIC repo — see release.yml.
+    # Guarded here too so the tag is never created in the first place, rather
+    # than created and then stranded by a release that refuses to run.
+    if: github.repository == 'driverforge/cli'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # full tag history for the version computation
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # Gate the release on the same checks CI runs (gofmt, vet, tests).
+      - name: Checks
+        run: make check
+
+      - name: Compute next version
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }} # for the published-release check below
+        run: |
+          set -euo pipefail
+          input="${{ github.event.inputs.version }}"
+          if [[ "$input" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            next="$input"
+          elif [[ "$input" == "major" || "$input" == "minor" || "$input" == "patch" ]]; then
+            # Bump from the latest STABLE tag; any prerelease tags (v*-rc1) are
+            # ignored so the arithmetic never sees a suffix.
+            latest="$(git tag -l 'v*' --sort=-v:refname | grep -v -- - | head -1)"
+            latest="${latest#v}"
+            latest="${latest:-0.0.0}"
+            IFS=. read -r major minor patch <<< "$latest"
+            case "$input" in
+              major) next="$((major+1)).0.0" ;;
+              minor) next="$major.$((minor+1)).0" ;;
+              patch) next="$major.$minor.$((patch+1))" ;;
+            esac
+          else
+            echo "::error::version must be patch, minor, major, or an exact X.Y.Z (prerelease suffixes aren't supported by the release pipeline yet) — got '$input'"
+            exit 1
+          fi
+          if git rev-parse -q --verify "refs/tags/v$next" >/dev/null; then
+            # An existing tag is only re-runnable while its release is unpublished
+            # — a run that died before the scm stage, or a draft. Once published,
+            # the release is immutable: GoReleaser re-uploads the blobs, then dies
+            # on 422 at the asset upload, never reaching the signing and publishing
+            # steps the re-run was for. Refuse here rather than three minutes and
+            # one dirty release store later.
+            if [ "$(gh release view "v$next" --json isDraft --jq .isDraft 2>/dev/null)" = "false" ]; then
+              echo "::error::v$next is already published, and published releases are immutable — re-running it cannot upload assets. Cut the next patch version instead."
+              exit 1
+            fi
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Re-releasing existing tag v$next (no published release)" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "Releasing v$next" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "tag=v$next" >> "$GITHUB_OUTPUT"
+
+      - name: Create and push tag
+        if: steps.version.outputs.exists == 'false'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "${{ steps.version.outputs.tag }}" -m "release: ${{ steps.version.outputs.tag }}"
+          git push origin "refs/tags/${{ steps.version.outputs.tag }}"
+
+      # GITHUB_TOKEN tag pushes don't trigger workflows, so start the release
+      # explicitly (release.yml's guard only accepts tag refs, which this is).
+      - name: Start release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run release.yml --ref "refs/tags/${{ steps.version.outputs.tag }}"

@@ -1,0 +1,422 @@
+name: Release
+# Name each run by the tag it releases ("Release v0.2.3"), so the run list
+# answers "what was the last version cut" at a glance.
+run-name: "Release ${{ github.ref_name }}"
+
+on:
+  push:
+    tags: ["v*"]
+  # Entry point for `cut-release.yml`: dispatch this workflow selecting the TAG as
+  # the ref. The job guard below refuses branch refs — GoReleaser needs a tag
+  # checkout.
+  #
+  # Re-dispatching a tag does NOT recover a partial failure, despite being the
+  # obvious move. Two things stop it. GitHub releases here are immutable, so once
+  # one is published GoReleaser cannot upload its assets a second time — it gets
+  # 422 "Cannot upload assets to an immutable release" and the job dies before the
+  # signing and publishing steps it was re-run for. And a dispatch runs the
+  # workflow file from the TAG, not from main, so fixes merged since the tag are
+  # not in play. Recovery is to cut the next patch version. (Learned on v0.5.0,
+  # twice.)
+  workflow_dispatch:
+
+permissions:
+  contents: write # create the GitHub Release
+
+env:
+  AZURE_STORAGE_CONTAINER: driverforge-releases
+  ARTIFACT_PATH: driverforge-cli
+  # The signing key lives in Azure Key Vault. Its private half is
+  # non-exportable, so signing happens via the Key Vault API
+  # and no key material ever reaches the runner.
+  #
+  # The vault name is a repo variable rather than a literal: this file is
+  # published to the public mirror, and the name identifies infrastructure that
+  # appears nowhere else publicly. It is not a credential — access is governed
+  # by the federated identity below — but there is no reason to name a target.
+  AZURE_KEY_VAULT: ${{ vars.AZURE_KEY_VAULT }}
+  RELEASE_SIGNING_KEY: release-signing-v1
+
+jobs:
+  release:
+    # Releases are cut from the PUBLIC repo only. .goreleaser.yaml targets
+    # `release.github: driverforge/cli`, so a run started here after the rename
+    # would publish a GitHub Release onto the mirror. The Azure signing preflight
+    # would fail first — this repo's name no longer matches the federated
+    # credential's subject — but relying on a late failure to protect the mirror
+    # is not a boundary. This is.
+    if: github.repository == 'driverforge/cli' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    # The federated credential's subject must be, exactly:
+    #
+    #   repo:driverforge@182759942/cli@1211161755:environment:release
+    #
+    # Not repo:driverforge/cli:… — this repo was renamed, and GitHub
+    # then issues an ID-suffixed subject so a reclaimed old name cannot inherit
+    # the federation. The IDs read as noise but are the durable half: org and
+    # repo IDs survive renames, the names do not. Confirm against a real run's
+    # "subject claim" log line rather than the documented format if this ever
+    # needs re-registering; v0.5.0 failed on exactly that assumption.
+    #
+    # Azure AD needs an exact subject and refs/tags/* is not expressible, hence
+    # scoping to an environment. This workflow is tag-triggered, so prefer a
+    # deployment-tag rule (v*) over required reviewers, which would stall every
+    # release on a human.
+    environment: release
+    permissions:
+      contents: write
+      # OIDC token for azure/login, and for signing the provenance attestation.
+      id-token: write
+      # Record the build provenance in GitHub's attestation store.
+      attestations: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # full history for the changelog
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # Short-lived installation token for pushing the Homebrew cask and Scoop
+      # manifest — the workflow's own GITHUB_TOKEN can't write outside this repo.
+      # Minted from the driverforge-bot GitHub App (org-wide client-id/key pair),
+      # scoped to exactly the two tap repos, valid for one hour. The app's
+      # installation must cover both repos with Contents read/write.
+      - name: Mint tap token from driverforge-bot
+        id: tap-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ vars.DRIVERFORGE_BOT_CLIENT_ID }}
+          private-key: ${{ secrets.DRIVERFORGE_BOT_PRIVATE_KEY }}
+          owner: driverforge
+          repositories: |
+            homebrew-tap
+            scoop-bucket
+
+      # Every credential is acquired and proven BEFORE anything is published.
+      # v0.5.0 learned this the hard way: authenticating after GoReleaser meant a
+      # federation failure landed with binaries, a GitHub release and both taps
+      # already at the new version while the release manifest still described the
+      # old one. A release that cannot finish should not have started.
+      - name: Authenticate to Azure for signing
+        uses: azure/login@v3
+        with:
+          client-id: ${{ vars.AZURE_RELEASE_SIGNER_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          # The identity holds one role: Key Vault Crypto User scoped to the
+          # signing key alone. It has no subscription-level reader, so asking
+          # for a subscription context would fail the login.
+          allow-no-subscriptions: true
+
+      # Logging in proves the federated identity resolves; it does not prove this
+      # identity may actually sign with the key. Those fail at different layers
+      # (Entra federation vs the Key Vault role assignment), so exercise the real
+      # operation on a throwaway digest while failing is still free.
+      - name: Verify the signing key is usable
+        run: |
+          set -euo pipefail
+          az keyvault key sign \
+            --vault-name "$AZURE_KEY_VAULT" \
+            --name "$RELEASE_SIGNING_KEY" \
+            --algorithm RS256 \
+            --digest "$(printf 'release-preflight' | openssl dgst -sha256 -binary | base64)" \
+            --query signature -o tsv > /dev/null
+          echo "signing key $RELEASE_SIGNING_KEY is usable"
+
+      # syft generates the per-archive SBOMs (see `sboms:` in .goreleaser.yaml).
+      # Installed rather than assumed: GoReleaser shells out to it and would fail
+      # the release if it were missing from the image.
+      - name: Install syft
+        uses: anchore/sbom-action/download-syft@v0.24.0
+
+      - uses: goreleaser/goreleaser-action@v7
+        with:
+          version: "~> v2"
+          args: release --clean
+        env:
+          # Pin the tag GoReleaser releases. On a workflow_dispatch run the ref
+          # IS the tag (guarded above), but GoReleaser's current-tag guess can
+          # otherwise pick a nearby tag sharing the commit — pinning avoids that.
+          GORELEASER_CURRENT_TAG: ${{ github.ref_name }}
+          # Creates the (internal/mirror) release in this repo.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Pushes the cask/manifest to homebrew-tap and scoop-bucket (see above).
+          TAP_GITHUB_TOKEN: ${{ steps.tap-token.outputs.token }}
+          # Canonical artifact upload to Azure (the `blobs` stage). Account name is a
+          # non-sensitive repo variable; only the key is a secret.
+          AZURE_STORAGE_ACCOUNT: ${{ vars.AZURE_STORAGE_ACCOUNT }}
+          AZURE_STORAGE_KEY: ${{ secrets.AZURE_STORAGE_KEY }}
+          # Sentry error-reporting DSN, injected into release binaries via ldflags
+          # (source defaults empty so forks/local builds never report to our
+          # Sentry). A repo VARIABLE, not a secret — a DSN is a public client key.
+          # Unset variable => empty => release ships with reporting disabled.
+          SENTRY_DSN: ${{ vars.DRIVERFORGE_SENTRY_DSN }}
+          # Mixpanel project token (public client key, like the DSN — a repo
+          # variable, not a secret). Unset => release ships with metrics dark.
+          MIXPANEL_TOKEN: ${{ vars.DRIVERFORGE_MIXPANEL_TOKEN }}
+          # macOS signing + notarization. Keep these COMMENTED OUT until the secrets exist:
+          # GitHub exports a missing secret as an empty string, which would still flip
+          # `isEnvSet` on and break the release. Uncomment all five once the secrets are
+          # added (Developer ID .p12 + App Store Connect .p8 API key, both base64-encoded).
+          # MACOS_SIGN_P12: ${{ secrets.MACOS_SIGN_P12 }}
+          # MACOS_SIGN_PASSWORD: ${{ secrets.MACOS_SIGN_PASSWORD }}
+          # MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
+          # MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+          # MACOS_NOTARY_KEY: ${{ secrets.MACOS_NOTARY_KEY }}
+
+      # Build provenance: a signed SLSA statement binding each archive's digest to
+      # this repository, commit and workflow run. The Key Vault signature further
+      # down proves *we* published an artifact; this proves *where it came from* —
+      # which is the claim that matters if the source is ever open, and the one
+      # that lets someone shipping a Driverforge-built driver show their own
+      # customer that the tool was built from the commit it claims.
+      #
+      # The bundle is published alongside the artifacts (below) rather than left
+      # only in GitHub's attestation store, so `gh attestation verify --bundle`
+      # works offline and without access to this repository.
+      - name: Attest build provenance
+        id: attest
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: "dist/*.tar.gz,dist/*.zip"
+
+      - name: Stage the attestation bundle for publishing
+        run: |
+          set -euo pipefail
+          cp "${{ steps.attest.outputs.bundle-path }}" dist/provenance.sigstore.jsonl
+          echo "bundle: $(wc -c < dist/provenance.sigstore.jsonl) bytes"
+
+      # GoReleaser uploaded the versioned archives + checksums to Azure. This step
+      # publishes the release manifest the CLI's update notifier reads — to both the
+      # immutable versioned path and the mutable `latest/` pointer — mirroring the SDK
+      # and agent release pipelines (same schema: version/tag/commit/releasedAt/artifacts).
+      # Split from the upload below so the manifest exists as a file
+      # before it is signed: the signature must cover the exact bytes that get
+      # uploaded, and building it inside the upload step left no seam to sign at.
+      - name: Generate release manifest
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+          BASE_URL="https://releases.driverforge.com/$AZURE_STORAGE_CONTAINER/$ARTIFACT_PATH/$TAG"
+
+          # Build the artifacts[] array from what GoReleaser produced: the archives,
+          # their SBOMs, and the provenance bundle.
+          #
+          # sha256 is what makes the signature worth anything: signing a manifest
+          # that only lists names and URLs authenticates nothing about the bytes
+          # behind them. With the digest inside the signed document, a verified
+          # signature plus a matching checksum chains the artifact back to the
+          # embedded key — the invariant releaseverify.VerifyManifest describes,
+          # and the same shape anvil-sdk and the agent already publish.
+          #
+          # Listing the SBOMs and the provenance bundle here puts them under that
+          # same signature, so "what is in this binary" and "where did it come
+          # from" are as tamper-evident as the binary itself. Consumers read
+          # artifacts[] by name, so the additions are backwards compatible.
+          artifacts="$(cd dist && for f in *.tar.gz *.zip *.sbom.json provenance.sigstore.jsonl; do
+            [ -e "$f" ] || continue
+            jq -n --arg n "$f" --arg u "$BASE_URL/$f" \
+              --arg s "$(sha256sum "$f" | cut -d' ' -f1)" \
+              '{name: $n, url: $u, sha256: $s}'
+          done | jq -s '.')"
+
+          jq -n \
+            --arg version "$VERSION" \
+            --arg tag "$TAG" \
+            --arg commit "$GITHUB_SHA" \
+            --arg releasedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --argjson artifacts "$artifacts" \
+            '{version: $version, tag: $tag, commit: $commit, releasedAt: $releasedAt, artifacts: $artifacts}' \
+            > manifest.json
+
+      - name: Sign the manifest
+        run: |
+          set -euo pipefail
+          # Sign the file exactly as written. Re-serialising the JSON here would
+          # reorder keys and produce a signature the CLI rejects.
+          DIGEST="$(openssl dgst -sha256 -binary manifest.json | base64)"
+          SIG="$(az keyvault key sign \
+            --vault-name "$AZURE_KEY_VAULT" \
+            --name "$RELEASE_SIGNING_KEY" \
+            --algorithm RS256 \
+            --digest "$DIGEST" \
+            --query signature -o tsv)"
+          jq -n \
+            --arg keyId "$RELEASE_SIGNING_KEY" \
+            --arg sig "$SIG" \
+            '{alg: "RS256", keyId: $keyId, sig: $sig}' \
+            > manifest.json.sig
+
+      - name: Publish release manifest to Azure
+        uses: azure/cli@v3
+        env:
+          AZURE_STORAGE_ACCOUNT: ${{ vars.AZURE_STORAGE_ACCOUNT }}
+          AZURE_STORAGE_KEY: ${{ secrets.AZURE_STORAGE_KEY }}
+        with:
+          inlineScript: |
+            set -euo pipefail
+            TAG="${GITHUB_REF_NAME}"
+
+            # The provenance bundle rides with the artifacts it describes, so it
+            # can be verified without reaching GitHub — which matters while this
+            # repository is private, and stays useful afterwards.
+            az storage blob upload -c "$AZURE_STORAGE_CONTAINER" \
+              -n "$ARTIFACT_PATH/$TAG/provenance.sigstore.jsonl" -f dist/provenance.sigstore.jsonl \
+              --content-type "application/jsonl" \
+              --content-cache-control "public, max-age=31536000, immutable" --overwrite
+
+            az storage blob upload -c "$AZURE_STORAGE_CONTAINER" \
+              -n "$ARTIFACT_PATH/$TAG/manifest.json" -f manifest.json \
+              --content-cache-control "public, max-age=31536000, immutable" --overwrite
+            az storage blob upload -c "$AZURE_STORAGE_CONTAINER" \
+              -n "$ARTIFACT_PATH/$TAG/manifest.json.sig" -f manifest.json.sig \
+              --content-cache-control "public, max-age=31536000, immutable" --overwrite
+            az storage blob upload -c "$AZURE_STORAGE_CONTAINER" \
+              -n "$ARTIFACT_PATH/latest/manifest.json" -f manifest.json \
+              --content-cache-control "no-cache, must-revalidate" --overwrite
+            az storage blob upload -c "$AZURE_STORAGE_CONTAINER" \
+              -n "$ARTIFACT_PATH/latest/manifest.json.sig" -f manifest.json.sig \
+              --content-cache-control "no-cache, must-revalidate" --overwrite
+
+      # The install script is the one artifact whose URL a user types from memory
+      # (or from a doc written a year ago), so it is the one that can never move.
+      # It is published twice: an immutable copy under the tag, recording exactly
+      # which installer shipped with each release, and the mutable copy at the
+      # artifact root that go.driverforge.com/get resolves to. The root copy is the
+      # public one — no-cache so a fix reaches users immediately, since a broken
+      # installer cannot be worked around by the person hitting it.
+      #
+      # It sits under $ARTIFACT_PATH, not the container root: the container also
+      # holds anvil-sdk and the agent, and a bare /install.sh would not say what it
+      # installs (nor leave room for theirs). The short link hides the length.
+      #
+      # text/plain so following the link in a browser renders the source instead of
+      # downloading it — anyone about to pipe this into a shell should be able to
+      # read it first.
+      - name: Publish the install script to Azure
+        uses: azure/cli@v3
+        env:
+          AZURE_STORAGE_ACCOUNT: ${{ vars.AZURE_STORAGE_ACCOUNT }}
+          AZURE_STORAGE_KEY: ${{ secrets.AZURE_STORAGE_KEY }}
+        with:
+          inlineScript: |
+            set -euo pipefail
+            TAG="${GITHUB_REF_NAME}"
+
+            az storage blob upload -c "$AZURE_STORAGE_CONTAINER" \
+              -n "$ARTIFACT_PATH/$TAG/install.sh" -f scripts/install.sh \
+              --content-type "text/plain; charset=utf-8" \
+              --content-cache-control "public, max-age=31536000, immutable" --overwrite
+            az storage blob upload -c "$AZURE_STORAGE_CONTAINER" \
+              -n "$ARTIFACT_PATH/install.sh" -f scripts/install.sh \
+              --content-type "text/plain; charset=utf-8" \
+              --content-cache-control "no-cache, must-revalidate" --overwrite
+
+      # A broken installer is only ever discovered by the person it breaks, so prove
+      # the published copy end to end rather than trusting the upload's exit code:
+      # fetch the public URL back and byte-compare it with what we shipped. This
+      # catches a wrong path, a stale cached copy, and an Azure error document
+      # served with a 200.
+      - name: Verify the published install script
+        run: |
+          set -euo pipefail
+          URL="https://releases.driverforge.com/$AZURE_STORAGE_CONTAINER/$ARTIFACT_PATH/install.sh"
+
+          # Blob storage is read-after-write consistent, but retry briefly rather
+          # than fail a whole release on a transient edge.
+          for attempt in 1 2 3; do
+            if curl -sSLf "$URL" -o published-install.sh; then break; fi
+            echo "attempt $attempt: $URL not readable yet"
+            sleep 5
+          done
+
+          if ! diff -u scripts/install.sh published-install.sh; then
+            echo "::error::$URL does not match scripts/install.sh"
+            exit 1
+          fi
+          echo "verified $URL"
+
+      # The release is not done because every step exited zero — it is done when
+      # the path a user actually takes works. This walks that path against the
+      # real store: it installs the release using the published installer, which
+      # exercises the manifest, its signature, the artifact digest and the trust
+      # chain tying them together, and would have caught the v0.5.0 skew where the
+      # taps moved to a version the manifest never described.
+      - name: Verify the published release end to end
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+          BASE="https://releases.driverforge.com/$AZURE_STORAGE_CONTAINER/$ARTIFACT_PATH"
+
+          # Both the immutable copy and the pointer must describe THIS release.
+          # `latest` lagging is the silent failure: taps and the GitHub release
+          # move, while every CLI in the field still reads the old version.
+          for dir in "$TAG" latest; do
+            got="$(curl -sSLf "$BASE/$dir/manifest.json" | jq -r .version)"
+            if [ "$got" != "$VERSION" ]; then
+              echo "::error::$dir/manifest.json describes $got, expected $VERSION"
+              exit 1
+            fi
+          done
+
+          # The real install, into a throwaway prefix, invoked exactly the way the
+          # docs tell a user to — so this verifies the documented command, not just
+          # the script. Pinning the version makes it check the release just
+          # published rather than whatever `latest` happens to resolve to.
+          # Fetched into a variable first, deliberately: a substitution that fails
+          # inside an argument does not trip `set -e`, so the inline form would
+          # quietly run `sh -c ""` and report success having installed nothing.
+          prefix="$(mktemp -d)"
+          installer="$(curl -fsSL "$BASE/install.sh")"
+          [ -n "$installer" ] || { echo "::error::$BASE/install.sh returned nothing"; exit 1; }
+          DRIVERFORGE_INSTALL_DIR="$prefix" DRIVERFORGE_VERSION="$VERSION" sh -c "$installer"
+
+          # --version is the build stamp and touches no network; the `version`
+          # subcommand probes the graph and a controller, which would fail here
+          # for reasons that have nothing to do with the release.
+          got="$("$prefix/driverforge" --version)"
+          echo "installed: $got"
+          case "$got" in
+            *"$VERSION"*) echo "end-to-end install verified for $TAG" ;;
+            *) echo "::error::installed binary reports '$got', expected $VERSION"; exit 1 ;;
+          esac
+
+      # A supply-chain claim nobody checks is decoration. This verifies the
+      # published artifacts against the published provenance — using the bundle
+      # from the blob store, not GitHub's API, because that is the path anyone
+      # outside this repository would take.
+      #
+      # It also asserts the SBOM is actually there: GoReleaser's blob upload
+      # selects artifacts by type, and if a version of it ever stopped including
+      # SBOMs the release would otherwise ship silently without one.
+      - name: Verify the published provenance and SBOM
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+          BASE="https://releases.driverforge.com/$AZURE_STORAGE_CONTAINER/$ARTIFACT_PATH/$TAG"
+          ASSET="driverforge_${VERSION}_linux_amd64.tar.gz"
+
+          work="$(mktemp -d)"
+          curl -fsSL "$BASE/$ASSET" -o "$work/$ASSET"
+          curl -fsSL "$BASE/provenance.sigstore.jsonl" -o "$work/provenance.jsonl"
+
+          # Fails if the archive is not covered by the bundle, or the bundle does
+          # not name this repository as the builder.
+          gh attestation verify "$work/$ASSET" \
+            --bundle "$work/provenance.jsonl" \
+            --repo "$GITHUB_REPOSITORY"
+
+          curl -fsSL "$BASE/$ASSET.sbom.json" -o "$work/sbom.json"
+          packages="$(jq '.packages | length' "$work/sbom.json")"
+          if [ "${packages:-0}" -lt 2 ]; then
+            echo "::error::$ASSET.sbom.json lists $packages packages — that is not a usable SBOM"
+            exit 1
+          fi
+          echo "provenance verified, SBOM lists $packages packages"

@@ -1,0 +1,17 @@
+<devicedata>
+  <copyright>Copyright 2026</copyright>
+  <manufacturer>Driverforge</manufacturer>
+  <name>Fixture Driver</name>
+  <modified>1/1/1970 00:00:00 AM</modified>
+  <version>000001</version>
+  <semver>2.3.4</semver>
+  <config>
+    <script jit="1" file="driver.lua"/>
+    <actions>
+      <action>
+        <name>Do Thing</name>
+        <command>DO_THING</command>
+      </action>
+    </actions>
+  </config>
+</devicedata>

@@ -1,0 +1,62 @@
+# Publishes the README sources in contrib/taps/ to the public tap repos
+# (homebrew-tap, scoop-bucket). Runs automatically when a merge to main
+# touches the sources (idempotent — skips when content already matches);
+# workflow_dispatch remains for manual re-runs.
+#
+# The commit is created with a driverforge-bot installation token, so both
+# the author and the push actor are driverforge-bot[bot]: the tap repos are
+# public and no employee identity may appear in their history. For the same
+# reason, never push to those repos by hand.
+name: Sync tap READMEs
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ["contrib/taps/**"]
+
+# contents:read is for checking out THIS repo (the README sources); the writes
+# to the tap repos happen via the minted app token, not GITHUB_TOKEN.
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - repo: homebrew-tap
+            source: contrib/taps/homebrew-tap-README.md
+          - repo: scoop-bucket
+            source: contrib/taps/scoop-bucket-README.md
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Mint token from driverforge-bot
+        id: bot
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ vars.DRIVERFORGE_BOT_CLIENT_ID }}
+          private-key: ${{ secrets.DRIVERFORGE_BOT_PRIVATE_KEY }}
+          owner: driverforge
+          repositories: ${{ matrix.repo }}
+
+      - name: Publish README.md
+        env:
+          GH_TOKEN: ${{ steps.bot.outputs.token }}
+          REPO: ${{ matrix.repo }}
+          SOURCE: ${{ matrix.source }}
+        run: |
+          set -euo pipefail
+          # Update-or-create: the contents API needs the current blob SHA to
+          # update an existing file; omit it and the call creates the file
+          # (initialising the default branch in a still-empty repo).
+          sha=$(gh api "repos/driverforge/$REPO/contents/README.md" --jq .sha 2>/dev/null || true)
+          if [ -n "$sha" ] && [ "$(gh api "repos/driverforge/$REPO/contents/README.md" --jq .content | tr -d '\n')" = "$(base64 -w0 < "$SOURCE")" ]; then
+            echo "README.md already up to date — nothing to publish."
+            exit 0
+          fi
+          args=(-f message="docs: sync README from driverforge/cli contrib/taps" -f content="$(base64 -w0 < "$SOURCE")")
+          [ -n "$sha" ] && args+=(-f sha="$sha")
+          gh api -X PUT "repos/driverforge/$REPO/contents/README.md" "${args[@]}" --jq '.commit.html_url'

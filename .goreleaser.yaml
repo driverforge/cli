@@ -1,0 +1,190 @@
+# GoReleaser config — https://goreleaser.com
+# On every `vX.Y.Z` tag this builds cross-platform binaries and publishes them to
+# Azure Blob Storage (releases.driverforge.com) — the canonical, customer-facing
+# source — then updates the Homebrew tap and Scoop bucket (whose download URLs point
+# at Azure, NOT GitHub, since customers can't reach the private repo). A GitHub
+# Release is still cut as an internal mirror / in case the CLI is open-sourced later.
+# Validate with `goreleaser check`.
+version: 2
+
+project_name: driverforge
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: driverforge
+    main: ./cmd/driverforge
+    binary: driverforge
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X github.com/driverforge/cli/internal/buildinfo.Version={{ .Version }}
+      - -X github.com/driverforge/cli/internal/buildinfo.Commit={{ .ShortCommit }}
+      - -X github.com/driverforge/cli/internal/buildinfo.Date={{ .Date }}
+      # Error-reporting DSN: source defaults empty ("wired but dark") so forks
+      # and local builds never report to our Sentry; only release builds carry
+      # it. Empty when the env is unset (e.g. `goreleaser check` locally).
+      - -X github.com/driverforge/cli/internal/errreport.SentryDSN={{ envOrDefault "SENTRY_DSN" "" }}
+      # Mixpanel project token, same wired-but-dark pattern: forks and local
+      # builds send no usage metrics; only release builds carry the token.
+      - -X github.com/driverforge/cli/internal/metrics.MixpanelToken={{ envOrDefault "MIXPANEL_TOKEN" "" }}
+      # Short-link base for user-facing deep links, same wired-but-dark pattern:
+      # only release builds route through go.driverforge.com (and so through the
+      # app's /a handler). Local, dev and fork builds link straight at the app.
+      - -X github.com/driverforge/cli/internal/telemetry.ShortLinkURL=https://go.driverforge.com
+
+# macOS code-signing + notarization (works on Linux CI via rcodesign — no Mac runner).
+# Disabled until the signing secrets are present, so the unsigned launch works unchanged.
+# To activate: obtain a Developer ID Application cert + an App Store Connect API key, add
+# the secrets, and uncomment the MACOS_* env block in .github/workflows/release.yml.
+# `enabled` is keyed on MACOS_SIGN_P12 being set; while it is unset the whole entry is
+# skipped (the sign/notarize fields below are not evaluated).
+notarize:
+  macos:
+    - enabled: '{{ isEnvSet "MACOS_SIGN_P12" }}'
+      ids:
+        - driverforge
+      sign:
+        certificate: "{{ .Env.MACOS_SIGN_P12 }}"       # base64 of the Developer ID .p12
+        password: "{{ .Env.MACOS_SIGN_PASSWORD }}"
+      notarize:
+        issuer_id: "{{ .Env.MACOS_NOTARY_ISSUER_ID }}" # App Store Connect API key issuer ID
+        key_id: "{{ .Env.MACOS_NOTARY_KEY_ID }}"       # API key ID
+        key: "{{ .Env.MACOS_NOTARY_KEY }}"             # base64 of the .p8 API key
+        wait: true
+        timeout: 20m
+
+archives:
+  - id: driverforge
+    formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+
+checksum:
+  name_template: "checksums.txt"
+
+# An SBOM per archive, so anyone shipping this binary can answer "what is in it"
+# without taking our word for it — and can be told by their own tooling when a
+# dependency in here is later found vulnerable.
+#
+# Per archive rather than per binary: the archive is the unit people actually
+# download, and it is the unit the provenance attestation covers, so the three
+# artefacts describe the same thing.
+#
+# syft is installed by the release workflow; SPDX JSON because it is the format
+# the widest set of scanners ingest.
+sboms:
+  - id: archives
+    artifacts: archive
+
+# Canonical distribution: upload archives + checksums to the Azure container
+# `driverforge-releases` under `driverforge-cli/<tag>/`. Served publicly at
+# https://releases.driverforge.com/driverforge-releases/driverforge-cli/<tag>/<file>.
+# Auth via AZURE_STORAGE_ACCOUNT / AZURE_STORAGE_KEY (set in release.yml).
+blobs:
+  - provider: azblob
+    bucket: driverforge-releases
+    directory: "driverforge-cli/{{ .Tag }}"
+    cache_control:
+      - public
+      - max-age=31536000
+      - immutable
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  use: github
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+# macOS: `brew install driverforge/tap/driverforge`
+# Casks are Homebrew's path for prebuilt binaries (the old `brews:`/formula path is
+# deprecated). The Go linker ad-hoc-signs the arm64 binary so it runs on Apple Silicon.
+# While builds are NOT notarized, the post-install hook strips the Gatekeeper quarantine
+# flag; once the MACOS_* signing secrets exist (see `notarize:` above) the hook
+# auto-disables, because xattr-stripping is unnecessary — and discouraged — once signed.
+#
+# `auto_updates true` is deliberately absent. The CLI does upgrade itself
+# (internal/selfupdate), and the stanza would tell brew to skip this cask on
+# `brew upgrade`/`brew outdated` unless --greedy is passed. It is not needed:
+# this pipeline updates the cask on every release, so brew's pinned version and
+# the self-update target are always the same build — brew can redundantly
+# reinstall, never downgrade over an upgrade. Adding it also freezes
+# `brew list --versions` at the install-time version, because the Caskroom
+# directory is named for it. Left off until real usage says otherwise.
+homebrew_casks:
+  - name: driverforge
+    binaries:
+      - driverforge
+    # Author as the GitHub App the push token belongs to (the id+login noreply
+    # form gives the commit the proper bot badge/avatar), not goreleaser's
+    # default goreleaserbot. The tap repos are public; only bot identities
+    # may appear in their history.
+    commit_author:
+      name: driverforge-bot[bot]
+      email: 264301095+driverforge-bot[bot]@users.noreply.github.com
+    repository:
+      owner: driverforge
+      name: homebrew-tap
+      token: "{{ .Env.TAP_GITHUB_TOKEN }}"
+    directory: Casks
+    homepage: "https://driverforge.dev"
+    description: "Driverforge CLI — build and manage Control4 drivers"
+    # Download from Azure, not GitHub — the tap repo is public metadata, the binary
+    # comes from releases.driverforge.com.
+    url:
+      template: "https://releases.driverforge.com/driverforge-releases/driverforge-cli/{{ .Tag }}/{{ .ArtifactName }}"
+      verified: "releases.driverforge.com/driverforge-releases/driverforge-cli/"
+    hooks:
+      post:
+        install: |
+          {{- if not (isEnvSet "MACOS_SIGN_P12") }}
+          # Unsigned build: remove the quarantine flag so Gatekeeper allows the binary.
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/driverforge"]
+          end
+          {{- else }}
+          # Signed + notarized build: no quarantine workaround required.
+          {{- end }}
+
+# Windows: `scoop install driverforge` (after `scoop bucket add driverforge https://github.com/driverforge/scoop-bucket`)
+scoops:
+  - name: driverforge
+    # Same bot attribution as the cask (see above).
+    commit_author:
+      name: driverforge-bot[bot]
+      email: 264301095+driverforge-bot[bot]@users.noreply.github.com
+    repository:
+      owner: driverforge
+      name: scoop-bucket
+      token: "{{ .Env.TAP_GITHUB_TOKEN }}"
+    # Download from Azure, not GitHub (see the cask note above).
+    url_template: "https://releases.driverforge.com/driverforge-releases/driverforge-cli/{{ .Tag }}/{{ .ArtifactName }}"
+    homepage: "https://driverforge.dev"
+    description: "Driverforge CLI — build and manage Control4 drivers"
+    license: "MIT"
+
+release:
+  github:
+    owner: driverforge
+    name: cli
+  # Only helps a release that was never published — a draft, or a run that died
+  # before the scm stage. Once a release is published it is immutable, and no
+  # setting here lets GoReleaser re-upload its assets: the API answers 422 whether
+  # or not this is set. Recovery from a published partial failure is the next patch
+  # version, not a retry (see workflow_dispatch in release.yml).
+  replace_existing_artifacts: true
