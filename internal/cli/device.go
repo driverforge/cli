@@ -21,7 +21,7 @@ func newDeviceCmd() *cobra.Command {
 		Use:   "device",
 		Short: "Manage the active deploy target (controller)",
 	}
-	cmd.AddCommand(newDeviceListCmd(), newDeviceSelectCmd(), newDeviceShowCmd(), newDeviceCurrentCmd(), newDeviceScanCmd(), newDeviceRefreshNavigatorsCmd(), newDeviceCapabilitiesCmd())
+	cmd.AddCommand(newDeviceListCmd(), newDeviceSelectCmd(), newDeviceNameCmd(), newDeviceShowCmd(), newDeviceCurrentCmd(), newDeviceScanCmd(), newDeviceRefreshNavigatorsCmd(), newDeviceCapabilitiesCmd())
 	return cmd
 }
 
@@ -149,26 +149,15 @@ func newDeviceRefreshNavigatorsCmd() *cobra.Command {
 	return cmd
 }
 
-// newDeviceCurrentCmd prints just the active device's name — a porcelain command
-// for scripts and shell prompts (e.g. a Spaceship section). It reads the local
-// context only (no network), and when no device is selected for the current org
-// it prints nothing and exits non-zero silently, so a prompt shows nothing
-// rather than an error.
+// newDeviceCurrentCmd prints just the active device's name. A device selection
+// is org-scoped, so this stays silent after an org switch until one is picked
+// again — see newCurrentCmd for the shared porcelain contract.
 func newDeviceCurrentCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:    "current",
-		Short:  "Print the active device's name (for scripts and prompts)",
-		Args:   cobra.NoArgs,
-		Hidden: true,
-		RunE: func(cmd *cobra.Command, _ []string) error {
+	return newCurrentCmd("Print the active device's name (for scripts and prompts)",
+		func() (string, error) {
 			d, err := orgctx.CurrentDevice()
-			if err != nil {
-				return clierr.Silent()
-			}
-			fmt.Fprintln(cmd.OutOrStdout(), d.Name)
-			return nil
-		},
-	}
+			return d.Name, err
+		})
 }
 
 // newDeviceListCmd lists the devices registered to the current organization.

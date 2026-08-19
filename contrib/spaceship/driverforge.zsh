@@ -7,12 +7,34 @@
 #
 #     ~/drivers/acme-thermostat  on  main   acme/living-room
 #
-# Install:
-#   1. Source this file from your ~/.zshrc, AFTER spaceship is initialised:
-#          source /path/to/cli/contrib/spaceship/driverforge.zsh
-#      (or copy it into ~/.config/spaceship/ and source it there)
-#   2. Add `driverforge` to your prompt order, e.g.:
-#          SPACESHIP_PROMPT_ORDER=( dir git driverforge line_sep char )
+# Install — add to ~/.zshrc, AFTER spaceship is initialised. This sources the
+# section and slots it in right after `git`, keeping the rest of Spaceship's
+# default order:
+#
+#     SPACESHIP_DRIVERFORGE_SECTION="$HOME/path/to/cli/contrib/spaceship/driverforge.zsh"
+#     [[ -r "$SPACESHIP_DRIVERFORGE_SECTION" ]] && source "$SPACESHIP_DRIVERFORGE_SECTION"
+#     if (( $+functions[spaceship_driverforge] )) \
+#       && (( ${#SPACESHIP_PROMPT_ORDER} )) \
+#       && (( ! ${SPACESHIP_PROMPT_ORDER[(Ie)driverforge]} )); then
+#       () {
+#         local -a order=(); local sec
+#         for sec in "${SPACESHIP_PROMPT_ORDER[@]}"; do
+#           order+=("$sec"); [[ "$sec" == git ]] && order+=(driverforge)
+#         done
+#         (( ${order[(Ie)driverforge]} )) || order+=(driverforge)
+#         SPACESHIP_PROMPT_ORDER=("${order[@]}")
+#       }
+#     fi
+#
+# Both guards matter. The `-r` test keeps a moved or unchecked-out repo from
+# erroring on every shell start, and the `$+functions` test keeps a failed
+# source from leaving `driverforge` in the prompt order with no section behind
+# it — Spaceship silently skips such an entry, which is how a broken install
+# stays invisible.
+#
+# Simpler, if you maintain your prompt order by hand: source the file and add
+# `driverforge` to it yourself, e.g.
+#     SPACESHIP_PROMPT_ORDER=( dir git driverforge line_sep char )
 #
 # It calls `driverforge org current` / `driverforge device current`, which only read the
 # local context file (no network) and print nothing when nothing is selected —

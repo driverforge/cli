@@ -411,3 +411,76 @@ func TestCreateProjectReturnsTheToken(t *testing.T) {
 		t.Errorf("Token = %q, want drv_new", p.Token)
 	}
 }
+
+func TestUpdateDeviceName(t *testing.T) {
+	stubLogin(t)
+
+	var gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"data":{"updateDeviceName":{"id":"d1","friendlyName":"main","hostname":"ea5-primary","ip":"192.168.1.10","deviceId":"00:0D:6F:AB:12:34","platform":"CONTROL4","status":"ACTIVE"}}}`)
+	}))
+	defer srv.Close()
+	t.Setenv("DRIVERFORGE_GRAPH_URL", srv.URL)
+
+	dev, err := New().UpdateDeviceName(context.Background(), "org-1", "d1", "main")
+	if err != nil {
+		t.Fatalf("UpdateDeviceName: %v", err)
+	}
+	if dev.FriendlyName != "main" || dev.DisplayName() != "main" {
+		t.Errorf("unexpected device: %+v", dev)
+	}
+
+	var req struct {
+		Variables struct {
+			OrganizationID string `json:"organizationId"`
+			Input          struct {
+				DeviceID     string  `json:"deviceId"`
+				FriendlyName *string `json:"friendlyName"`
+			} `json:"input"`
+		} `json:"variables"`
+	}
+	if err := json.Unmarshal([]byte(gotBody), &req); err != nil {
+		t.Fatalf("request body: %v", err)
+	}
+	if req.Variables.OrganizationID != "org-1" {
+		t.Errorf("organizationId = %q, want org-1", req.Variables.OrganizationID)
+	}
+	// The mutation keys on the ASSOCIATION id, not the hardware deviceId — sending
+	// the MAC here would 404 against a device the caller can plainly see.
+	if req.Variables.Input.DeviceID != "d1" {
+		t.Errorf("input.deviceId = %q, want the association id d1", req.Variables.Input.DeviceID)
+	}
+	if req.Variables.Input.FriendlyName == nil || *req.Variables.Input.FriendlyName != "main" {
+		t.Errorf("input.friendlyName = %v, want \"main\"", req.Variables.Input.FriendlyName)
+	}
+}
+
+// An empty name must go over the wire as an explicit null: that is how the
+// mutation spells "clear the override" and fall back to the hostname.
+func TestUpdateDeviceNameClearsWithNull(t *testing.T) {
+	stubLogin(t)
+
+	var gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"data":{"updateDeviceName":{"id":"d1","friendlyName":"","hostname":"ea5-primary","deviceId":"00:0D:6F:AB:12:34","status":"ACTIVE"}}}`)
+	}))
+	defer srv.Close()
+	t.Setenv("DRIVERFORGE_GRAPH_URL", srv.URL)
+
+	dev, err := New().UpdateDeviceName(context.Background(), "org-1", "d1", "   ")
+	if err != nil {
+		t.Fatalf("UpdateDeviceName: %v", err)
+	}
+	if dev.DisplayName() != "ea5-primary" {
+		t.Errorf("DisplayName = %q, want the hostname fallback", dev.DisplayName())
+	}
+	if !strings.Contains(gotBody, `"friendlyName":null`) {
+		t.Errorf("friendlyName not sent as null: %s", gotBody)
+	}
+}

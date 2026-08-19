@@ -95,25 +95,14 @@ func newOrgSelectCmd() *cobra.Command {
 	}
 }
 
-// newOrgCurrentCmd prints just the active organization's slug — a porcelain
-// command for scripts and shell prompts (e.g. a Spaceship section). It reads the
-// local context only (no network), and when no org is selected it prints nothing
-// and exits non-zero silently, so a prompt shows nothing rather than an error.
+// newOrgCurrentCmd prints just the active organization's slug — see
+// newCurrentCmd for the shared porcelain contract.
 func newOrgCurrentCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:    "current",
-		Short:  "Print the active organization's slug (for scripts and prompts)",
-		Args:   cobra.NoArgs,
-		Hidden: true,
-		RunE: func(cmd *cobra.Command, _ []string) error {
+	return newCurrentCmd("Print the active organization's slug (for scripts and prompts)",
+		func() (string, error) {
 			o, err := orgctx.Current()
-			if err != nil {
-				return clierr.Silent()
-			}
-			fmt.Fprintln(cmd.OutOrStdout(), o.Slug)
-			return nil
-		},
-	}
+			return o.Slug, err
+		})
 }
 
 // newOrgShowCmd prints the active organization.

@@ -178,6 +178,37 @@ func (c *Client) ListDevices(ctx context.Context, organizationID string) ([]Devi
 	return data.Devices, nil
 }
 
+const updateDeviceNameMutation = `mutation($organizationId: String!, $input: UpdateDeviceNameInput!) { updateDeviceName(organizationId: $organizationId, input: $input) { id friendlyName hostname ip deviceId platform status } }`
+
+// UpdateDeviceName sets the org-scoped friendly name for a device — the same
+// name the Anvil UI shows, so naming a controller here renames it everywhere.
+// id is the association id (Device.ID from ListDevices), not the hardware
+// deviceId. An empty name clears the override and the device falls back to its
+// hostname.
+func (c *Client) UpdateDeviceName(ctx context.Context, organizationID, id, name string) (Device, error) {
+	var data struct {
+		Device Device `json:"updateDeviceName"`
+	}
+	vars := map[string]any{
+		"organizationId": organizationID,
+		"input":          map[string]any{"deviceId": id, "friendlyName": nullableName(name)},
+	}
+	if err := c.do(ctx, updateDeviceNameMutation, vars, &data); err != nil {
+		return Device{}, err
+	}
+	return data.Device, nil
+}
+
+// nullableName maps an empty name to a JSON null, which is how the mutation
+// spells "clear the override" — sending "" would work today (the service
+// trims and nils it) but null is the documented contract.
+func nullableName(name string) any {
+	if strings.TrimSpace(name) == "" {
+		return nil
+	}
+	return name
+}
+
 const deviceFingerprintQuery = `query($deviceId: String!) { device(deviceId: $deviceId) { deviceId certFingerprint } }`
 
 // DeviceFingerprint returns the controller's pinned TLS certificate fingerprint
