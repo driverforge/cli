@@ -16,6 +16,7 @@ import (
 	"github.com/driverforge/cli/internal/initdriver"
 	"github.com/driverforge/cli/internal/orgctx"
 	"github.com/driverforge/cli/internal/project"
+	"github.com/driverforge/cli/internal/sdkrelease"
 	"github.com/driverforge/cli/internal/ui"
 )
 
@@ -73,7 +74,7 @@ func reviewableChanges(changes []initdriver.Change) (reviewable []initdriver.Cha
 }
 
 func isSDKBundle(rel string) bool {
-	return strings.HasSuffix(filepath.ToSlash(rel), "vendor/driverforge-sdk.lua")
+	return strings.HasSuffix(filepath.ToSlash(rel), "vendor/"+sdkrelease.BundleName)
 }
 
 // reviewCodeChanges presents the given file changes in a tabbed, scrollable

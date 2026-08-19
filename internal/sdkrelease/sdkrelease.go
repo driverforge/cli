@@ -45,8 +45,11 @@ const defaultBaseURL = "https://releases.driverforge.com/driverforge-releases"
 // and the bundle init embeds is vendor/driverforge-sdk.lua.
 const artifactPath = "driverforge-sdk"
 
-// bundleName is the Lua file inside each release zip (and the cached filename).
-const bundleName = "driverforge-sdk.lua"
+// BundleName is the Lua file inside each release zip, the cached filename, and
+// the name init embeds into a project's src/vendor/. One definition: a second
+// spelling would let the writer and the reader silently disagree about which
+// file is "the SDK".
+const BundleName = "driverforge-sdk.lua"
 
 // downloadClient bounds the manifest + zip fetches; the bundle is tens of KB.
 var downloadClient = &http.Client{Timeout: 60 * time.Second}
@@ -183,7 +186,7 @@ func CachedPath(version string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(root, version, bundleName), nil
+	return filepath.Join(root, version, BundleName), nil
 }
 
 // IsCached reports whether an exact version's bundle is present locally.
@@ -215,7 +218,7 @@ func ListCached() ([]string, error) {
 		if !e.IsDir() {
 			continue
 		}
-		if _, statErr := os.Stat(filepath.Join(root, e.Name(), bundleName)); statErr == nil {
+		if _, statErr := os.Stat(filepath.Join(root, e.Name(), BundleName)); statErr == nil {
 			versions = append(versions, e.Name())
 		}
 	}
@@ -365,7 +368,7 @@ func extractBundle(zipData []byte) ([]byte, error) {
 		return nil, fmt.Errorf("not a valid zip: %w", err)
 	}
 	for _, f := range zr.File {
-		if filepath.Base(f.Name) != bundleName {
+		if filepath.Base(f.Name) != BundleName {
 			continue
 		}
 		rc, err := f.Open()
@@ -375,5 +378,5 @@ func extractBundle(zipData []byte) ([]byte, error) {
 		defer rc.Close()
 		return io.ReadAll(io.LimitReader(rc, 8<<20))
 	}
-	return nil, fmt.Errorf("zip does not contain %s", bundleName)
+	return nil, fmt.Errorf("zip does not contain %s", BundleName)
 }

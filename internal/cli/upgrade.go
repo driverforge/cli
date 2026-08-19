@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"sync"
 	"text/tabwriter"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/driverforge/cli/internal/buildinfo"
 	"github.com/driverforge/cli/internal/clierr"
 	"github.com/driverforge/cli/internal/driverforgeconfig"
+	"github.com/driverforge/cli/internal/initdriver"
 	"github.com/driverforge/cli/internal/orgctx"
 	"github.com/driverforge/cli/internal/project"
 	"github.com/driverforge/cli/internal/sdkrelease"
@@ -356,24 +358,52 @@ func sdkRow(ctx context.Context, out io.Writer) compRow {
 		r.state, r.note = stateNA, "not set up for Driverforge"
 		return r
 	}
+	// The config records which version init embedded; it is not evidence that the
+	// bundle is still in the tree. Check the file, and report CURRENT as what the
+	// driver actually carries — claiming "up to date" about a file we never opened
+	// is the one answer this row must never give.
+	embedded := sdkBundleEmbedded(proj)
 	r.current = firstNonEmpty(cfg.SDKVersion, "unknown")
+	if !embedded {
+		r.current = "missing"
+	}
+
 	rctx, cancel := context.WithTimeout(ctx, versionHealthTimeout)
 	defer cancel()
 	rel, err := sdkrelease.Resolve(rctx, "latest")
 	if err != nil {
+		// A missing bundle is known locally, so say so even when the store is
+		// unreachable — we just can't offer the re-embed that would fix it.
 		r.state, r.note = stateUnknown, "couldn't reach the release store"
+		if !embedded {
+			r.note = "not embedded — couldn't reach the release store"
+		}
 		return r
 	}
 	r.latest = rel.Version
-	if !updatecheck.IsNewer(rel.Version, cfg.SDKVersion) {
+	if embedded && !updatecheck.IsNewer(rel.Version, cfg.SDKVersion) {
 		r.state, r.note = stateUpToDate, "up to date"
 		return r
 	}
+	// Re-embedding an absent bundle is a repair, which runSDKUpdate already
+	// handles: it deliberately does not skip a version the config claims is
+	// current, precisely so a missing or mangled bundle can be restored.
 	r.state, r.note, r.cmd = stateUpdate, "update available", "driverforge upgrade"
+	if !embedded {
+		r.note = "not embedded — re-embed"
+	}
 	r.notesURL = fmt.Sprintf(sdkReleaseNotesURL, rel.Version)
 	p, c, target := proj, cfg, rel.Version
 	r.run = func(ctx context.Context) error { return runSDKUpdate(ctx, out, p, c, target) }
 	return r
+}
+
+// sdkBundleEmbedded reports whether the vendored SDK bundle is actually present
+// in the project's source tree. An empty file counts as absent: a truncated
+// bundle is not a driver that works.
+func sdkBundleEmbedded(proj project.Project) bool {
+	st, err := os.Stat(initdriver.VendorBundlePath(proj.SrcDir))
+	return err == nil && st.Size() > 0
 }
 
 // checkReason gives a short reason for a failed component check: a UserError is an

@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/driverforge/cli/internal/sdkrelease"
 	"github.com/driverforge/cli/pkg/c4z/manifest"
 )
 
@@ -42,6 +43,14 @@ func (d Decision) loggerOpt() string {
 		return ""
 	}
 	return ", { logger = " + d.LoggerGlobal + " }"
+}
+
+// VendorBundlePath is where init embeds the SDK bundle in a project's source
+// tree. The planner writes it, `driverforge upgrade` checks it is still there,
+// and the review UI hides it from the diff — so it gets one definition rather
+// than three that can drift apart.
+func VendorBundlePath(srcDir string) string {
+	return filepath.Join(srcDir, "vendor", sdkrelease.BundleName)
 }
 
 // sdkRequire is the require the patched entry uses to pull in the vendored SDK.

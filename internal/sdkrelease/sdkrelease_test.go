@@ -66,7 +66,7 @@ func TestEnsureCachedDownloadsThenServesFromCache(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	zipBytes := testzip.WithFile(t, bundleName, luaBody)
+	zipBytes := testzip.WithFile(t, BundleName, luaBody)
 	sum := sha256.Sum256(zipBytes)
 	zipSHA := hex.EncodeToString(sum[:])
 
@@ -228,7 +228,7 @@ func TestExtractBundleRejectsZipWithoutLua(t *testing.T) {
 // and when the manifest carries no checksum at all (mandatory verification).
 func TestEnsureCachedRejectsBadOrMissingChecksum(t *testing.T) {
 	const version = "2.0.0"
-	zipBytes := testzip.WithFile(t, bundleName, "-- sdk\n")
+	zipBytes := testzip.WithFile(t, BundleName, "-- sdk\n")
 
 	serve := func(t *testing.T, sha string) error {
 		mux := http.NewServeMux()

@@ -69,7 +69,7 @@ func Plan(proj project.Project, d Decision) (*Result, error) {
 	res.addModify(proj, entryAbs, entrySrc, patched)
 
 	// 2. Embed the SDK bundle.
-	vendorAbs := filepath.Join(src, "vendor", "driverforge-sdk.lua")
+	vendorAbs := VendorBundlePath(src)
 	if err := res.addFile(proj, vendorAbs, d.SDKBundle, true); err != nil {
 		return nil, err
 	}

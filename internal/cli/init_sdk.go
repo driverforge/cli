@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -91,7 +90,7 @@ func runSDKUpdate(ctx context.Context, out io.Writer, proj project.Project, cfg 
 	}
 
 	var changes []initdriver.Change
-	vendorCh, ok, err := fileChange(proj.Dir, filepath.Join(proj.SrcDir, "vendor", "driverforge-sdk.lua"), bundle)
+	vendorCh, ok, err := fileChange(proj.Dir, initdriver.VendorBundlePath(proj.SrcDir), bundle)
 	if err != nil {
 		return err
 	}
