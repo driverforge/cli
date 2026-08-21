@@ -142,7 +142,7 @@ homebrew_casks:
       name: homebrew-tap
       token: "{{ .Env.TAP_GITHUB_TOKEN }}"
     directory: Casks
-    homepage: "https://driverforge.dev"
+    homepage: "https://go.driverforge.com/app"
     description: "Driverforge CLI — build and manage Control4 drivers"
     # Download from Azure, not GitHub — the tap repo is public metadata, the binary
     # comes from releases.driverforge.com.
@@ -174,7 +174,7 @@ scoops:
       token: "{{ .Env.TAP_GITHUB_TOKEN }}"
     # Download from Azure, not GitHub (see the cask note above).
     url_template: "https://releases.driverforge.com/driverforge-releases/driverforge-cli/{{ .Tag }}/{{ .ArtifactName }}"
-    homepage: "https://driverforge.dev"
+    homepage: "https://go.driverforge.com/app"
     description: "Driverforge CLI — build and manage Control4 drivers"
     license: "MIT"
 

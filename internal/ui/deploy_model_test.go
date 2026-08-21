@@ -70,7 +70,7 @@ func TestDeployModelConfirmedWithErrors(t *testing.T) {
 		Step:      "driver restarted with init errors",
 		Version:   "1.2.3",
 		Detail:    "init: index nil",
-		ReportURL: "https://app.driverforge.dev/reports/abc",
+		ReportURL: "https://dev.driverforge.com/reports/abc",
 		Outcome:   DeployWarn,
 	})
 

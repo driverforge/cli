@@ -214,7 +214,7 @@ func TestRunDeployPlainStreamsProgress(t *testing.T) {
 func TestRunDeployPlainFail(t *testing.T) {
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		io.WriteString(w, `{"state":"staged","step":"writing driver","terminal":false}
-{"state":"failed","step":"driver failed to load","error":"driver crashed during init","reportUrl":"https://app.driverforge.dev/reports/xyz","terminal":true}
+{"state":"failed","step":"driver failed to load","error":"driver crashed during init","reportUrl":"https://dev.driverforge.com/reports/xyz","terminal":true}
 `)
 	}))
 	t.Cleanup(srv.Close)
@@ -240,7 +240,7 @@ func TestRunDeployPlainFail(t *testing.T) {
 func TestRunDeployPlainConfirmedWithErrors(t *testing.T) {
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		io.WriteString(w, `{"state":"restarting","step":"driver restarting","terminal":false}
-{"state":"confirmed_with_errors","step":"driver restarted","version":"2.0.0","error":"OnDriverInit: nil deref","reportUrl":"https://app.driverforge.dev/reports/init1","terminal":true}
+{"state":"confirmed_with_errors","step":"driver restarted","version":"2.0.0","error":"OnDriverInit: nil deref","reportUrl":"https://dev.driverforge.com/reports/init1","terminal":true}
 `)
 	}))
 	t.Cleanup(srv.Close)

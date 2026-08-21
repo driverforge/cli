@@ -12,10 +12,10 @@ import (
 var (
 	// CentrifugoURL is the Centrifugo WebSocket endpoint the web app also
 	// connects to. Dev: ws://localhost:8086/connection/websocket.
-	CentrifugoURL = "wss://ws.driverforge.dev/connection/websocket"
+	CentrifugoURL = "wss://ws.driverforge.com/connection/websocket"
 	// AppURL is the Anvil web app base, used to derive the Centrifugo origin. Dev:
-	// https://app.driverforge.test.
-	AppURL = "https://app.driverforge.dev"
+	// https://dev.driverforge.test.
+	AppURL = "https://dev.driverforge.com"
 	// ShortLinkURL is the short-link domain fronting user-facing deep links, whose
 	// slugs redirect via the app's /a handler. Empty in source on purpose — the
 	// same "wired but dark" pattern as the Sentry DSN and Mixpanel token: only

@@ -67,12 +67,12 @@ func TestEventsURL(t *testing.T) {
 // app — the same destination /a would have redirected to, so no /a route is needed.
 func TestEventsURLDirect(t *testing.T) {
 	t.Setenv("DRIVERFORGE_SHORTLINK_URL", "")
-	t.Setenv("DRIVERFORGE_APP_URL", "https://app.driverforge.test/")
+	t.Setenv("DRIVERFORGE_APP_URL", "https://dev.driverforge.test/")
 
-	if got, want := EventsURL("acme", "thermostat"), "https://app.driverforge.test/acme/events/?project=thermostat"; got != want {
+	if got, want := EventsURL("acme", "thermostat"), "https://dev.driverforge.test/acme/events/?project=thermostat"; got != want {
 		t.Errorf("direct EventsURL = %q, want %q", got, want)
 	}
-	if got, want := EventsURL("acme", "a b&x=1"), "https://app.driverforge.test/acme/events/?project=a+b%26x%3D1"; got != want {
+	if got, want := EventsURL("acme", "a b&x=1"), "https://dev.driverforge.test/acme/events/?project=a+b%26x%3D1"; got != want {
 		t.Errorf("direct EventsURL escaping = %q, want %q", got, want)
 	}
 }
@@ -80,9 +80,9 @@ func TestEventsURLDirect(t *testing.T) {
 func TestResolveCentrifugoOrigin(t *testing.T) {
 	// Derived from the app URL by default (scheme + host, no path/trailing slash).
 	t.Setenv("DRIVERFORGE_CENTRIFUGO_ORIGIN", "")
-	t.Setenv("DRIVERFORGE_APP_URL", "https://app.driverforge.test/foo/")
-	if got := resolveCentrifugoOrigin(); got != "https://app.driverforge.test" {
-		t.Errorf("origin = %q, want https://app.driverforge.test", got)
+	t.Setenv("DRIVERFORGE_APP_URL", "https://dev.driverforge.test/foo/")
+	if got := resolveCentrifugoOrigin(); got != "https://dev.driverforge.test" {
+		t.Errorf("origin = %q, want https://dev.driverforge.test", got)
 	}
 	// Explicit override wins.
 	t.Setenv("DRIVERFORGE_CENTRIFUGO_ORIGIN", "https://custom.example")

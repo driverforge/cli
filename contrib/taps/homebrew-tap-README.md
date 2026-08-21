@@ -1,6 +1,6 @@
 # Driverforge Homebrew tap
 
-Homebrew tap for [Driverforge](https://driverforge.dev) command-line tools:
+Homebrew tap for [Driverforge](https://go.driverforge.com/app) command-line tools:
 
 - **driverforge** — build, deploy, and manage Control4 drivers
 - **gayle** — deploy configuration and secrets to AWS SSM Parameter Store and
@@ -43,5 +43,5 @@ brew upgrade gayle
 
 ## Documentation
 
-- driverforge: https://docs.driverforge.dev/cli/overview
+- driverforge: https://go.driverforge.com/cli
 - gayle: https://github.com/driverforge/gayle#readme

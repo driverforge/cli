@@ -10,7 +10,7 @@ import (
 
 // docsBaseURL is the short-link domain fronting the docs. Each top-level command
 // has a slug matching its own name (go.driverforge.com/build →
-// docs.driverforge.dev/cli/build/), so a new top-level command needs its slug
+// docs.driverforge.com/cli/build/), so a new top-level command needs its slug
 // minted in Shlink or its usage hint will 404.
 //
 // Published contract: these slugs are baked into released binaries and keep being

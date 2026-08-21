@@ -8,7 +8,7 @@ import (
 )
 
 func newCheckIn() *checkInModel {
-	m := &checkInModel{driver: "Eight Sleep", url: "https://app.driverforge.test/suru/eight-sleep/events/", events: make(chan struct{}), spinner: newSpinner()}
+	m := &checkInModel{driver: "Eight Sleep", url: "https://dev.driverforge.test/suru/eight-sleep/events/", events: make(chan struct{}), spinner: newSpinner()}
 	answerProbes(m) // terminal probes answered — quits resolve immediately
 	return m
 }

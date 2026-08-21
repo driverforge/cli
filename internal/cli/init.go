@@ -19,7 +19,7 @@ import (
 )
 
 // dashboardURL is where users manage projects, API keys, and their plan.
-const dashboardURL = "https://driverforge.dev"
+const dashboardURL = "https://go.driverforge.com/app"
 
 // driverPlan is the shape init will give the driver: the SDK bundle to embed, how
 // its version is bumped, whether build configurations are scaffolded, and the

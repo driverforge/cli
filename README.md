@@ -6,7 +6,7 @@ packages `.c4z` artifacts (a single-binary alternative to the Python
 controllers, and hot-swaps Lua without a device reload.
 
 **📖 Using the CLI?** Installation, commands, and usage guides live at
-**<https://docs.driverforge.dev/cli/overview/>** — this README is for people
+**<https://go.driverforge.com/cli>** — this README is for people
 working **on** the CLI itself.
 
 ## Prerequisites

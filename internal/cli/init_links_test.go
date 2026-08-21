@@ -32,15 +32,15 @@ func TestOrgLinkURLShortened(t *testing.T) {
 func TestOrgLinkURLDirect(t *testing.T) {
 	isolateConfig(t)
 	t.Setenv("DRIVERFORGE_SHORTLINK_URL", "")
-	t.Setenv("DRIVERFORGE_APP_URL", "https://app.driverforge.test/")
+	t.Setenv("DRIVERFORGE_APP_URL", "https://dev.driverforge.test/")
 	if err := orgctx.SetCurrent(orgctx.Org{ID: "org-1", Slug: "acme"}); err != nil {
 		t.Fatal(err)
 	}
 
-	if got, want := orgLinkURL("plan", "settings/subscription"), "https://app.driverforge.test/acme/settings/subscription"; got != want {
+	if got, want := orgLinkURL("plan", "settings/subscription"), "https://dev.driverforge.test/acme/settings/subscription"; got != want {
 		t.Errorf("orgLinkURL = %q, want %q", got, want)
 	}
-	if got, want := orgLinkURL("billing", "settings/billing"), "https://app.driverforge.test/acme/settings/billing"; got != want {
+	if got, want := orgLinkURL("billing", "settings/billing"), "https://dev.driverforge.test/acme/settings/billing"; got != want {
 		t.Errorf("orgLinkURL = %q, want %q", got, want)
 	}
 }
