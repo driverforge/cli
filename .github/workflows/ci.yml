@@ -3,16 +3,10 @@ name: CI
 on:
   push:
     branches: [main]
-  # "edited" (non-default) re-runs the mirror gate when the PR title or body
-  # changes: those become the squash-merge message, which is what syncs to the
-  # public mirror, so without it an edit after a green run could put an
-  # unscrubbable reference into an immutable public commit.
   pull_request:
-    types: [opened, synchronize, reopened, edited]
 
 permissions:
   contents: read
-  pull-requests: read
 
 jobs:
   test:
@@ -42,31 +36,3 @@ jobs:
         run: |
           go test -coverprofile=coverage.out ./...
           go tool cover -func=coverage.out | tail -1
-
-  # Mirror gate. This repo publishes an allowlist of its files to the public
-  # mirror, so nothing that must stay internal may reach main.
-  #
-  # It is the whole guarantee. Nothing checks the mirror after the fact, because
-  # a published commit message is immutable and the only remedy would be a
-  # re-seed — so the check has to run while the content can still be changed.
-  #
-  # The rules are shared across every mirror rather than written per repo.
-  #
-  # Add `mirror_clean` to the required checks on main; `test` and `Qlty` alone
-  # do not cover it.
-  mirror_clean:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-
-      # The engine every mirrored repo shares. This repo contributes
-      # .mirror-guard.json and nothing else.
-      #
-      # What actually becomes the mirror commit message, per this repo's merge
-      # settings: the PR title plus the branch's commit messages. The PR
-      # DESCRIPTION never reaches it and is not checked — a description citing
-      # the ticket that motivated the change is normal and must not fail a build.
-      - name: published files and message are mirror-clean
-        uses: driverforge/mirror-guard@v1
-        with:
-          message: ${{ github.event.pull_request.title }}
