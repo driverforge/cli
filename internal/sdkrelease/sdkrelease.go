@@ -41,7 +41,7 @@ import (
 const defaultBaseURL = "https://releases.driverforge.com/driverforge-releases"
 
 // artifactPath is the SDK's directory within the release store. It follows the
-// SDK's own rename (DF-915): the publish pipeline writes under driverforge-sdk,
+// SDK's own rename: the publish pipeline writes under driverforge-sdk,
 // and the bundle init embeds is vendor/driverforge-sdk.lua.
 const artifactPath = "driverforge-sdk"
 
