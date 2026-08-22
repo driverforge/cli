@@ -50,6 +50,8 @@ jobs:
   # a published commit message is immutable and the only remedy would be a
   # re-seed — so the check has to run while the content can still be changed.
   #
+  # The rules are shared across every mirror rather than written per repo.
+  #
   # Add `mirror_clean` to the required checks on main; `test` and `Qlty` alone
   # do not cover it.
   mirror_clean:
@@ -57,24 +59,14 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: published files are mirror-clean
-        run: tools/check-mirror-tree
-
+      # The engine every mirrored repo shares. This repo contributes
+      # .mirror-guard.json and nothing else.
+      #
       # What actually becomes the mirror commit message, per this repo's merge
-      # settings: squash_merge_commit_title = COMMIT_OR_PR_TITLE and
-      # squash_merge_commit_message = COMMIT_MESSAGES. So the PR title and the
-      # branch's commit messages are checked, and the PR DESCRIPTION is not —
-      # it never reaches the message, and a description citing the ticket that
-      # motivated the change is normal and should not fail a build.
-      - name: squash-merge message is mirror-clean
-        if: github.event_name == 'pull_request'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR: ${{ github.event.pull_request.number }}
-          PR_TITLE: ${{ github.event.pull_request.title }}
-        run: |
-          set -euo pipefail
-          {
-            printf '%s\n' "$PR_TITLE"
-            gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/commits" --paginate --jq '.[].commit.message'
-          } | tools/check-mirror-message
+      # settings: the PR title plus the branch's commit messages. The PR
+      # DESCRIPTION never reaches it and is not checked — a description citing
+      # the ticket that motivated the change is normal and must not fail a build.
+      - name: published files and message are mirror-clean
+        uses: driverforge/mirror-guard@v1
+        with:
+          message: ${{ github.event.pull_request.title }}
