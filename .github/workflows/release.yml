@@ -38,6 +38,58 @@ env:
   RELEASE_SIGNING_KEY: release-signing-v1
 
 jobs:
+  # Publishing belongs to the PUBLIC mirror. This repo carries the org's
+  # `oss-mirror` repository property — the flag for a private repo that
+  # publishes to a public one, and the same property the mirror rulesets key on.
+  #
+  # Read over the API because custom properties are not in the `github` context
+  # (only `vars` is), so they cannot be tested in a job-level `if:`.
+  #
+  # Fails CLOSED: `custom_properties` is always an object on this endpoint ({}
+  # when nothing is set), so its absence means the response is not the shape we
+  # expect, and an unrecognised response must refuse rather than read as "not a
+  # mirror". API and token errors refuse for the same reason.
+  guard:
+    runs-on: ubuntu-latest
+    outputs:
+      allowed: ${{ steps.check.outputs.allowed }}
+    steps:
+      - id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -uo pipefail
+          allowed=false
+          reason=""
+          if resp="$(gh api "repos/${GITHUB_REPOSITORY}" 2>/dev/null)" \
+            && printf '%s' "$resp" | jq -e 'has("custom_properties")' >/dev/null 2>&1; then
+            # Only an ABSENT property permits publishing. Any value means this repo
+            # mirrors somewhere, whatever that value encodes: the property began as
+            # true|false and is becoming a platform selector (actions|buildkite), so a
+            # test for "true" would read "actions" as "not a mirror" and publish from
+            # the private repo. `false` stays permissive for the transition.
+            mirror="$(printf '%s' "$resp" | jq -r '.custom_properties["oss-mirror"] // ""')"
+            case "$mirror" in
+              "" | false) allowed=true ;;
+              *) reason="${GITHUB_REPOSITORY} publishes to a public mirror (oss-mirror=${mirror})" ;;
+            esac
+          else
+            reason="could not read the oss-mirror property on ${GITHUB_REPOSITORY}"
+          fi
+          echo "allowed=$allowed" >> "$GITHUB_OUTPUT"
+          echo "reason=$reason" >> "$GITHUB_OUTPUT"
+          echo "allowed=$allowed${reason:+ — $reason}"
+
+      # An automatic run skips quietly: nobody is waiting on it, and a red tick
+      # on every ordinary tag push would teach people to ignore this workflow.
+      # A run someone ASKED for fails, because a skipped job is grey and sends no
+      # mail — the person is waiting on an outcome that is not going to happen.
+      - name: refuse a manual run from a mirrored private repo
+        if: steps.check.outputs.allowed != 'true' && github.event_name == 'workflow_dispatch'
+        run: |
+          echo "::error::${{ steps.check.outputs.reason }} — run this on the mirror instead"
+          exit 1
+
   release:
     # Releases are cut from the PUBLIC repo only. .goreleaser.yaml targets
     # `release.github: driverforge/cli`, so a run started here after the rename
@@ -45,7 +97,8 @@ jobs:
     # would fail first — this repo's name no longer matches the federated
     # credential's subject — but relying on a late failure to protect the mirror
     # is not a boundary. This is.
-    if: github.repository == 'driverforge/cli' && startsWith(github.ref, 'refs/tags/v')
+    needs: guard
+    if: needs.guard.outputs.allowed == 'true' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     # The federated credential's subject must be, exactly:
     #

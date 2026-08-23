@@ -39,6 +39,49 @@ jobs:
     runs-on: ubuntu-latest
     environment: release
     steps:
+      # Publishing belongs to the PUBLIC mirror. This repo carries the org's
+      # `oss-mirror` repository property — the flag for a private repo that
+      # publishes to a public one, and the same property the mirror rulesets
+      # key on.
+      #
+      # This workflow is workflow_dispatch ONLY, so a blocked run always means a
+      # person asked for something that is not going to happen — it fails rather
+      # than skips, because a skipped job is grey and sends no mail. Workflows
+      # that also fire automatically (release.yml, tap-readmes.yml) gate on a
+      # guard job instead, so their automatic runs skip quietly.
+      #
+      # It is read over the API rather than tested in a job-level `if:`, because
+      # custom properties are not in the `github` context (only `vars` is).
+      #
+      # Fails CLOSED. `custom_properties` is always an object on this endpoint
+      # ({} when nothing is set), so its ABSENCE means the response is not the
+      # shape we think it is — and an unrecognised response must refuse rather
+      # than read as "not a mirror". A token blip or API error refuses for the
+      # same reason: publishing is the one outcome that cannot be undone.
+      - name: refuse to run the release preflight from a mirrored private repo
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          resp="$(gh api "repos/${GITHUB_REPOSITORY}")"
+          if ! printf '%s' "$resp" | jq -e 'has("custom_properties")' >/dev/null; then
+            echo "::error::could not read repository properties — refusing to run the release preflight"
+            exit 1
+          fi
+          # Only an ABSENT property permits publishing. Any value means this repo
+          # mirrors somewhere, whatever that value encodes: the property began as
+          # true|false and is becoming a platform selector (actions|buildkite), so a
+          # test for "true" would read "actions" as "not a mirror" and publish from
+          # the private repo. `false` stays permissive for the transition.
+          mirror="$(printf '%s' "$resp" | jq -r '.custom_properties["oss-mirror"] // ""')"
+          case "$mirror" in
+            "" | false) : ;;
+            *)
+              echo "::error::${GITHUB_REPOSITORY} publishes to a public mirror (oss-mirror=${mirror}) — run the release preflight from the mirror instead"
+              exit 1
+              ;;
+          esac
+          echo "oss-mirror is not set on ${GITHUB_REPOSITORY} — proceeding."
       # Which credentials actually resolve here. Organisation secrets can be
       # scoped to private repositories only, in which case a public repo
       # silently receives empty strings — and SENTRY_DSN / MIXPANEL_TOKEN pass
