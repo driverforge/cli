@@ -44,7 +44,15 @@ func handleAlreadyInit(out io.Writer, proj project.Project, cfg *driverforgeconf
 	if len(cfg.BuildTargets) > 0 {
 		rows = append(rows, [2]string{"targets", strings.Join(cfg.BuildTargets, ", ")})
 	}
+	// A project can be recorded as set up and still be missing the pieces init
+	// wrote — a deleted vendor bundle, an entry that lost its wiring. Point at the
+	// repair when that's the case, rather than at upgrade, which only swaps the
+	// bundle and would leave the real damage in place.
 	tip := "Run `driverforge upgrade` to update the embedded SDK."
+	if diag := initdriver.Diagnose(proj, len(cfg.BuildTargets) > 0); !diag.Healthy() {
+		rows = append(rows, [2]string{"status", fmt.Sprintf("incomplete — %d check(s) failing", len(diag.Failed()))})
+		tip = "Run `driverforge doctor` to restore what's missing."
+	}
 	if ui.Interactive(flagNoTUI) {
 		ui.Fprintln(out, "\n"+ui.WarningBlock("This project is already set up for Driverforge.", rows, tip))
 		return nil
@@ -54,7 +62,7 @@ func handleAlreadyInit(out io.Writer, proj project.Project, cfg *driverforgeconf
 	if len(cfg.BuildTargets) > 0 {
 		fmt.Fprintf(out, "  Targets:  %s\n", strings.Join(cfg.BuildTargets, ", "))
 	}
-	fmt.Fprintln(out, "\nRun `driverforge upgrade` to update the embedded SDK.")
+	fmt.Fprintln(out, "\n"+tip)
 	return nil
 }
 

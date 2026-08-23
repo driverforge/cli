@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os"
 	"sync"
 	"text/tabwriter"
 
@@ -355,55 +354,48 @@ func sdkRow(ctx context.Context, out io.Writer) compRow {
 	}
 	cfg, err := driverforgeconfig.Load(proj.Dir)
 	if err != nil || cfg == nil {
-		r.state, r.note = stateNA, "not set up for Driverforge"
+		// A driver project that was never set up: init's job, not upgrade's.
+		r.state, r.note = stateNA, "not set up — run `driverforge init`"
 		return r
 	}
 	// The config records which version init embedded; it is not evidence that the
-	// bundle is still in the tree. Check the file, and report CURRENT as what the
-	// driver actually carries — claiming "up to date" about a file we never opened
-	// is the one answer this row must never give.
-	embedded := sdkBundleEmbedded(proj)
-	r.current = firstNonEmpty(cfg.SDKVersion, "unknown")
-	if !embedded {
-		r.current = "missing"
+	// setup is still intact. Diagnose the tree — claiming "up to date" about a
+	// file we never opened is the one answer this row must never give.
+	//
+	// A drifted project is NOT offered an inline fix. Restoring it rewrites the
+	// entry Lua, the manifest and the squishy, and the picker's contract is that
+	// selecting a row IS the consent — it prompts for nothing and shows no diff.
+	// That is fine for swapping one vendored file and wrong for patching source,
+	// so this row routes to `doctor`, which reviews before it writes.
+	if diag := initdriver.Diagnose(proj, len(cfg.BuildTargets) > 0); !diag.Healthy() {
+		r.current = "incomplete"
+		if len(diag.Failed()) == 1 && diag.Failed()[0].Name == "embedded SDK" {
+			r.current = "missing"
+		}
+		r.state, r.note = stateUnknown, "setup incomplete — run `driverforge doctor`"
+		return r
 	}
+	r.current = firstNonEmpty(cfg.SDKVersion, "unknown")
 
 	rctx, cancel := context.WithTimeout(ctx, versionHealthTimeout)
 	defer cancel()
 	rel, err := sdkrelease.Resolve(rctx, "latest")
 	if err != nil {
-		// A missing bundle is known locally, so say so even when the store is
-		// unreachable — we just can't offer the re-embed that would fix it.
 		r.state, r.note = stateUnknown, "couldn't reach the release store"
-		if !embedded {
-			r.note = "not embedded — couldn't reach the release store"
-		}
 		return r
 	}
 	r.latest = rel.Version
-	if embedded && !updatecheck.IsNewer(rel.Version, cfg.SDKVersion) {
+	if !updatecheck.IsNewer(rel.Version, cfg.SDKVersion) {
 		r.state, r.note = stateUpToDate, "up to date"
 		return r
 	}
-	// Re-embedding an absent bundle is a repair, which runSDKUpdate already
-	// handles: it deliberately does not skip a version the config claims is
-	// current, precisely so a missing or mangled bundle can be restored.
+	// Reaching here means the setup is intact and only the version is behind —
+	// exactly the case runSDKUpdate was built for: swap the bundle, bump config.
 	r.state, r.note, r.cmd = stateUpdate, "update available", "driverforge upgrade"
-	if !embedded {
-		r.note = "not embedded — re-embed"
-	}
 	r.notesURL = fmt.Sprintf(sdkReleaseNotesURL, rel.Version)
 	p, c, target := proj, cfg, rel.Version
 	r.run = func(ctx context.Context) error { return runSDKUpdate(ctx, out, p, c, target) }
 	return r
-}
-
-// sdkBundleEmbedded reports whether the vendored SDK bundle is actually present
-// in the project's source tree. An empty file counts as absent: a truncated
-// bundle is not a driver that works.
-func sdkBundleEmbedded(proj project.Project) bool {
-	st, err := os.Stat(initdriver.VendorBundlePath(proj.SrcDir))
-	return err == nil && st.Size() > 0
 }
 
 // checkReason gives a short reason for a failed component check: a UserError is an

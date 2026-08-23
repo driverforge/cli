@@ -121,7 +121,7 @@ func newRootCmd() *cobra.Command {
 	root.SetVersionTemplate(buildinfo.String() + "\n")
 	root.AddCommand(newBuildCmd(), newInitCmd(), newPublishCmd(), newDeployCmd(), newSyncCmd(), newVersionCmd())
 	root.AddCommand(newLoginCmd(), newLogoutCmd(), newWhoamiCmd(), newOrgCmd(), newDeviceCmd())
-	root.AddCommand(newUpgradeCmd())
+	root.AddCommand(newUpgradeCmd(), newDoctorCmd())
 	installUsageErrors(root) // make unknown command/flag/arg errors friendly
 	return root
 }
