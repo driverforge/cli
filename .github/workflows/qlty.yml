@@ -93,7 +93,7 @@ jobs:
           EVENT_BASE: ${{ github.event.pull_request.base.sha }}
         run: echo "ref=${EVENT_BASE:-origin/main}" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
 
