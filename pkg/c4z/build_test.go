@@ -506,3 +506,59 @@ func TestBuildCustomManifestPathAndOutputDir(t *testing.T) {
 		t.Errorf("artifact not written to the custom output dir: %v", err)
 	}
 }
+
+func TestBuildWarnsOnUndeclaredLocalRequire(t *testing.T) {
+	_, srcDir, distDir := writeTestProject(t, false)
+	// helper.lua exists and driver.lua requires it, but squishy has no Module
+	// line for it — the forgotten-manifest-line mistake. openssl has no local
+	// file, so it must stay silent.
+	if err := os.WriteFile(filepath.Join(srcDir, "helper.lua"), []byte("return {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "driver.lua"),
+		[]byte("local c = require('config')\nlocal h = require('helper')\nlocal o = require('openssl')\nprint(c, h, o)\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var warns []string
+	res, err := Build(context.Background(), Options{
+		Configuration: "dev", SrcDir: srcDir, DistDir: distDir,
+		Progress: func(e Event) {
+			if e.Status == StepWarn {
+				warns = append(warns, e.Msg)
+			}
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(warns) != 1 || !strings.Contains(warns[0], `"helper"`) || !strings.Contains(warns[0], "driver.lua:2") {
+		t.Errorf("StepWarn events = %v, want one naming \"helper\" at driver.lua:2", warns)
+	}
+	if len(res.Warnings) != 1 || res.Warnings[0] != warns[0] {
+		t.Errorf("Result.Warnings = %v, want the emitted warning", res.Warnings)
+	}
+}
+
+func TestBuildWarningsAsErrors(t *testing.T) {
+	_, srcDir, distDir := writeTestProject(t, false)
+	if err := os.WriteFile(filepath.Join(srcDir, "helper.lua"), []byte("return {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "driver.lua"),
+		[]byte("local h = require('helper')\nprint(h)\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := Build(context.Background(), Options{
+		Configuration: "dev", SrcDir: srcDir, DistDir: distDir, WarningsAsErrors: true,
+	})
+	var wae *WarningsAsErrorsError
+	if !errors.As(err, &wae) || wae.Count != 1 {
+		t.Fatalf("err = %v, want WarningsAsErrorsError{Count: 1}", err)
+	}
+	// The failure must stop the pipeline before packaging: no artifact on disk.
+	if entries, _ := os.ReadDir(distDir); len(entries) != 0 {
+		t.Errorf("dist dir not empty after failed build: %v", entries)
+	}
+}

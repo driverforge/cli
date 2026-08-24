@@ -23,16 +23,17 @@ import (
 
 func newBuildCmd() *cobra.Command {
 	var (
-		configuration string
-		increment     bool
-		versionFlag   string
-		c4zproj       string
-		outputDir     string
-		unpack        bool
-		sourcemap     bool
-		encrypt       bool
-		noSuffix      bool
-		allowExecute  bool
+		configuration    string
+		increment        bool
+		versionFlag      string
+		c4zproj          string
+		outputDir        string
+		unpack           bool
+		sourcemap        bool
+		encrypt          bool
+		noSuffix         bool
+		allowExecute     bool
+		warningsAsErrors bool
 	)
 	cmd := &cobra.Command{
 		Use:   "build",
@@ -82,18 +83,19 @@ func newBuildCmd() *cobra.Command {
 				distDir = outputDir
 			}
 			_, err = executeBuild(cmd, c4z.Options{
-				Configuration: configuration,
-				SrcDir:        proj.SrcDir,
-				DistDir:       distDir,
-				Version:       nextVersion,
-				ManifestPath:  c4zproj,
-				AllowExecute:  allowExecute,
-				Unpack:        unpack,
-				Sourcemap:     sourcemap,
-				Encrypt:       encryptOverride,
-				NoSuffix:      noSuffixEffective,
-				Verbose:       flagVerbose,
-				Now:           time.Now(),
+				Configuration:    configuration,
+				SrcDir:           proj.SrcDir,
+				DistDir:          distDir,
+				Version:          nextVersion,
+				ManifestPath:     c4zproj,
+				AllowExecute:     allowExecute,
+				Unpack:           unpack,
+				Sourcemap:        sourcemap,
+				Encrypt:          encryptOverride,
+				NoSuffix:         noSuffixEffective,
+				Verbose:          flagVerbose,
+				WarningsAsErrors: warningsAsErrors,
+				Now:              time.Now(),
 			}, configuration)
 			return err
 		},
@@ -108,6 +110,7 @@ func newBuildCmd() *cobra.Command {
 	cmd.Flags().BoolVarP(&sourcemap, "sourcemap", "s", false, "generate a Lua source map")
 	cmd.Flags().BoolVar(&encrypt, "encrypt", false, "encrypt the driver script for this build (--encrypt=false forces off); default follows the project config's configuration entry, then driver.xml")
 	cmd.Flags().BoolVar(&noSuffix, "no-suffix", false, "build a named configuration under the naked driver name — no artifact or display-name suffix, replacing the default build's .c4z in dist (--no-suffix=false forces suffixing back on)")
+	cmd.Flags().BoolVar(&warningsAsErrors, "warnings-as-errors", false, "fail the build (before packaging) if it emits any warning — for CI, where a warned build must not produce an artifact")
 	cmd.MarkFlagsMutuallyExclusive("increment", "version")
 	return cmd
 }
@@ -192,6 +195,8 @@ func buildInFrame(ctx context.Context, f *ui.Frame, opts c4z.Options, configurat
 			}
 		case c4z.StepSkip:
 			f.Logf("– %s%s", label, suffix)
+		case c4z.StepWarn:
+			f.Warnf("⚠ %s", e.Msg)
 		case c4z.StepFail:
 			f.Logf("✗ %s: %v", label, e.Err)
 		}
@@ -364,6 +369,11 @@ func versioningNotConfiguredErr(what string) *clierr.UserError {
 // UI-agnostic) to friendly clierr.UserErrors so they render as a card and aren't
 // reported to Sentry. Anything else is a genuine failure and passes through.
 func buildErr(err error) error {
+	var warned *c4z.WarningsAsErrorsError
+	if errors.As(err, &warned) {
+		return clierr.Wrap(err, "Build failed: "+warned.Error(),
+			"the warnings are listed above — fix them, or build without --warnings-as-errors")
+	}
 	var cfgNotFound *c4z.ConfigNotFoundError
 	if errors.As(err, &cfgNotFound) {
 		return clierr.Wrap(err, cfgNotFound.Error(),

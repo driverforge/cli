@@ -18,6 +18,21 @@ func (e *ConfigNotFoundError) Error() string {
 	return fmt.Sprintf("config.%s.lua not found in %s", e.Configuration, e.Dir)
 }
 
+// WarningsAsErrorsError is returned when a build emitted warnings while
+// Options.WarningsAsErrors was set. The warnings themselves were already
+// reported as StepWarn events; this failure stops the pipeline before any
+// artifact is packaged.
+type WarningsAsErrorsError struct {
+	Count int
+}
+
+func (e *WarningsAsErrorsError) Error() string {
+	if e.Count == 1 {
+		return "1 warning treated as an error"
+	}
+	return fmt.Sprintf("%d warnings treated as errors", e.Count)
+}
+
 // UnsupportedDriverTypeError is returned when the manifest declares a driver type
 // other than the supported "c4z".
 type UnsupportedDriverTypeError struct {

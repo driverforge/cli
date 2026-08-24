@@ -29,6 +29,8 @@ func PlainProgress(w io.Writer, verbose bool) func(c4z.Event) {
 			if verbose {
 				fmt.Fprintf(w, "  – %s (skipped)\n", StepLabel(e.Step))
 			}
+		case c4z.StepWarn:
+			fmt.Fprintf(w, "  ⚠ %s\n", e.Msg)
 		case c4z.StepFail:
 			fmt.Fprintf(w, "  ✗ %s: %v\n", StepLabel(e.Step), e.Err)
 		}

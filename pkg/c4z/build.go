@@ -56,6 +56,10 @@ const (
 	StepOK
 	StepSkip
 	StepFail
+	// StepWarn is an advisory emitted mid-step: the step continues (and later
+	// reports its own terminal status), but the build finished with something
+	// the user should read. Also collected into Result.Warnings.
+	StepWarn
 )
 
 // Event is a single progress report. Err is set only with StepFail.
@@ -104,6 +108,12 @@ type Options struct {
 	// which is never suffixed.
 	NoSuffix bool
 
+	// WarningsAsErrors fails the build when any warning is emitted (before the
+	// artifact is packaged, so CI can never pick up the output of a build that
+	// warned). The default keeps warnings advisory — interactive builds want
+	// to be told and carry on.
+	WarningsAsErrors bool
+
 	Now       time.Time         // clock for the driver.xml <modified> stamp; zero => time.Now()
 	Encryptor encrypt.Encryptor // nil => encrypt.Default()
 	Progress  func(Event)       // nil => silent
@@ -118,6 +128,9 @@ type Result struct {
 	UnpackedDir   string
 	SourceMapPath string
 	Encrypted     bool
+	// Warnings collects every StepWarn message the build emitted, for callers
+	// that consume the Result rather than the Progress stream.
+	Warnings []string
 }
 
 // Build runs the full pipeline and returns the produced artifacts.
@@ -230,6 +243,13 @@ func (b *builder) emit(step Step, status Status, msg string, err error) {
 	if b.o.Progress != nil {
 		b.o.Progress(Event{Step: step, Status: status, Msg: msg, Err: err})
 	}
+}
+
+// warn emits a StepWarn event and records the message on the Result, so both
+// the Progress stream and Result consumers see every warning.
+func (b *builder) warn(step Step, msg string) {
+	b.res.Warnings = append(b.res.Warnings, msg)
+	b.emit(step, StepWarn, msg, nil)
 }
 
 func (b *builder) cleanupWork() {
@@ -392,6 +412,20 @@ func (b *builder) squishLua() error {
 	sq, err := squish.ParseFile(filepath.Join(b.work, "squishy"))
 	if err != nil {
 		return err
+	}
+	// The forgotten-manifest-line check: a require whose file is
+	// sitting right there but isn't declared would be silently dropped from
+	// the bundle, and the only later symptom is a driver that fails to load
+	// after it has shipped. Requires with no local file (runtime-provided
+	// modules like openssl) are not the packager's to judge, so they pass.
+	missing := squish.MissingRequires(b.work, sq)
+	for _, m := range missing {
+		b.warn(StepSquish, fmt.Sprintf(
+			"%s:%d requires %q, but squishy has no Module entry for it — the module will not be bundled",
+			m.File, m.Line, m.Module))
+	}
+	if b.o.WarningsAsErrors && len(missing) > 0 {
+		return &WarningsAsErrorsError{Count: len(b.res.Warnings)}
 	}
 	bundle, err := squish.Bundle(b.work, sq)
 	if err != nil {
