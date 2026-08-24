@@ -185,7 +185,7 @@ func (m *FrameModel) renderLog() string {
 		lines = append(lines, mutedStyle.Render(fmt.Sprintf("… %d earlier lines", len(entries)-frameLogTail)))
 		entries = entries[len(entries)-frameLogTail:]
 	}
-	width := cardWidth()
+	width := frameWidth()
 	for _, e := range entries {
 		text := e.text
 		if e.warn {
@@ -201,7 +201,7 @@ func (m *FrameModel) renderLog() string {
 // summary rows exist) a spacer and the aligned key/value rows — the same shape
 // SuccessBlock renders.
 func (m *FrameModel) frameRows() []string {
-	width := cardWidth()
+	width := frameWidth()
 	rows := []string{lipgloss.NewStyle().Width(width).Render(m.stepIcon() + " " + m.step)}
 	if len(m.rows) == 0 {
 		return rows

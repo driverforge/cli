@@ -80,6 +80,24 @@ func cardWidth() int {
 	}
 }
 
+// frameWidth returns the wrap width for run-frame content: the full terminal
+// width minus the two cells the "┃ " bar prefix occupies. The frame must
+// hard-wrap to SOME width — it is a live inline region, and a line the
+// terminal soft-wraps throws off the repaint height math — but unlike a card
+// it claims the whole terminal, so long values (artifact paths, log lines)
+// stay selectable in one piece. Falls back to the card width when not a TTY.
+func frameWidth() int {
+	w, ok := terminalWidth()
+	if !ok {
+		return promptWidth
+	}
+	avail := w - 2 // the "┃ " bar prefix
+	if avail < promptWidthMin {
+		return promptWidthMin
+	}
+	return avail
+}
+
 // terminalWidth returns the controlling terminal's column count. It tries stderr
 // then stdout (either is the terminal in practice), so it works for cards on
 // either stream. ok is false when neither is a TTY.
