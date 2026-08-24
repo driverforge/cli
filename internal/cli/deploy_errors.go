@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
+	"os"
+	"syscall"
 
 	"github.com/driverforge/cli/internal/agent"
 	"github.com/driverforge/cli/internal/clierr"
@@ -92,9 +95,63 @@ func agentUnreachableErr(dev orgctx.Device, cause error) error {
 	if host := deviceHost(dev); host != "" {
 		where = fmt.Sprintf("%s (%s)", dev.Name, host)
 	}
+
+	// "Couldn't reach it" is true of every failure here and useful for none of
+	// them. The transport error already says WHICH way it failed, and the three
+	// ways have nothing in common: a refused connection means the controller is
+	// right there and nothing is serving; a timeout means we never got to it at
+	// all; an unresolvable name means we were never going to. Each gets the step
+	// that actually applies, and the docs carry the why — a hint that explains
+	// the agent's internals dates the moment those internals change.
+	switch {
+	case isConnRefused(cause):
+		return clierr.WrapT(cause, "Agent not accepting connections",
+			fmt.Sprintf("%s answered, but nothing is listening on the deploy port.", where),
+			"In Composer, open the Anvil Agent driver and run its \"Restart Deploy Server\" action — see "+agentDocsURL)
+
+	case isTimeout(cause):
+		return clierr.WrapT(cause, "Controller not responding",
+			fmt.Sprintf("No response from %s.", where),
+			"Check the controller is powered on and reachable from this machine — a VLAN or firewall "+
+				"between you and it will block the deploy port. If its address has changed, re-run "+
+				"`driverforge device select` — see "+agentDocsURL)
+
+	case isDNSError(cause):
+		return clierr.WrapT(cause, "Controller address won't resolve",
+			fmt.Sprintf("Couldn't resolve an address for %s.", where),
+			"A Control4 hostname isn't a DNS name, so the controller's IP is what deploy uses. "+
+				"Re-run `driverforge device select` to refresh it — see "+agentDocsURL)
+	}
+
 	return clierr.WrapT(cause, "Agent unreachable",
 		fmt.Sprintf("Couldn't reach the Anvil Agent on %s.", where),
 		"Check the Anvil Agent is installed and running on the controller — see "+agentDocsURL)
+}
+
+// isConnRefused reports a TCP refusal: the host is up and answered, but nothing
+// is bound to the deploy port. Distinct from a timeout, and the distinction is
+// the whole diagnosis — it rules out the network and points at the agent.
+func isConnRefused(err error) bool {
+	return errors.Is(err, syscall.ECONNREFUSED)
+}
+
+// isTimeout reports that nothing answered in time — the packets went nowhere, so
+// the controller is off, on another network, or behind something dropping them.
+// Covers both a net.Error timeout and a context deadline, since a request bounded
+// by ctx surfaces the latter.
+func isTimeout(err error) bool {
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, os.ErrDeadlineExceeded) {
+		return true
+	}
+	var ne net.Error
+	return errors.As(err, &ne) && ne.Timeout()
+}
+
+// isDNSError reports a name that wouldn't resolve — reachable only when a device
+// record has a hostname and no IP, since deviceHost prefers the IP.
+func isDNSError(err error) bool {
+	var de *net.DNSError
+	return errors.As(err, &de)
 }
 
 // agentMissingCapabilityErr is the friendly condition when the agent answers but
