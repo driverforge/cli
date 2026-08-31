@@ -26,10 +26,19 @@ steps:
     plugins: &go
       - docker#v5.11.0:
           image: golang:1.25.8
-          # Not as root. Root ignores file permission bits, and some tests force
-          # a write to fail by making the target read-only — as root that write
-          # succeeds and the test fails for the wrong reason.
-          propagate-uid-gid: true
+          # NOT root. Root ignores file permission bits, so a test that forces
+          # a write to fail by making the target read-only sees it succeed:
+          #
+          #   --- FAIL: TestApplyChangesFailedWriteRestoresBackup
+          #       applyChanges should fail writing a read-only file
+          #
+          # propagate-uid-gid was tried first and does the wrong thing here: it
+          # propagates the AGENT's uid, and the hosted agents run as root, so it
+          # faithfully propagated root.
+          #
+          # Nobody runs this CLI as root, so the behaviour the test asserts is
+          # the real one — the environment is what should match it.
+          user: "1000:1000"
           environment:
             - HOME=/tmp
             - GOCACHE=/tmp/go-build
