@@ -1,5 +1,7 @@
 # Driverforge CLI
 
+[![CI](https://badge.buildkite.com/c3dfa0a79e8ed68f9f0e34cd087ff41800eae7ab37de1b4980.svg?branch=main)](https://buildkite.com/kmsgroup/cli)
+
 `driverforge` builds, deploys, and live-develops **Control4 drivers**: it
 packages `.c4z` artifacts (a single-binary alternative to the Python
 `driverpackager` + `luajit squish` + OpenSSL toolchain), deploys them to
