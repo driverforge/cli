@@ -59,8 +59,9 @@ make check   # gofmt check + go vet + tests — run this before pushing
 
 ### Maintainability gate
 
-CI also runs a [qlty](https://qlty.sh) maintainability gate on every PR
-(`.github/workflows/qlty.yml`). It fails on any code smell — complexity,
+A [qlty](https://qlty.sh) maintainability gate runs on every PR once it reaches
+our internal repository, so you will not see it on your pull request here. It
+fails on any code smell — complexity,
 duplication, long parameter lists — in a file your branch changed, **including
 smells your branch did not write**: editing a file makes its debt yours to clean
 up. Thresholds live in `.qlty/qlty.toml`.

@@ -71,7 +71,7 @@ function resolveBase(ref) {
   }
 }
 
-// The version CI pins in .github/workflows/qlty.yml. Older CLIs are rejected up
+// The version CI pins in .buildkite/steps/run-qlty.sh. Older CLIs are rejected up
 // front: `qlty smells --sarif` is not accepted by older builds (0.511.0, the
 // current Homebrew default, rejects the flag), and the raw failure is a clap
 // usage dump that reads like a bug in the gate rather than "upgrade qlty".
