@@ -26,20 +26,9 @@ steps:
     plugins: &go
       - docker#v5.11.0:
           image: golang:1.25.8
-          # NOT root. Root ignores file permission bits, so a test that forces
-          # a write to fail by making the target read-only sees it succeed:
-          #
-          #   --- FAIL: TestApplyChangesFailedWriteRestoresBackup
-          #       applyChanges should fail writing a read-only file
-          #
-          # propagate-uid-gid was tried first and does the wrong thing here: it
-          # propagates the AGENT's uid, and the hosted agents run as root, so it
-          # faithfully propagated root.
-          #
-          # Nobody runs this CLI as root, so the behaviour the test asserts is
-          # the real one — the environment is what should match it.
-          user: "1000:1000"
           environment:
+            # The agent's home is not the container's. Without these, Go has
+            # nowhere writable to cache and fails before compiling anything.
             - HOME=/tmp
             - GOCACHE=/tmp/go-build
             - GOMODCACHE=/tmp/go-mod
@@ -64,5 +53,34 @@ steps:
     timeout_in_minutes: 20
     # -shuffle catches tests that only pass in declaration order; -race catches
     # what both of those hide.
-    plugins: *go
+    #
+    # This step alone runs as a NON-ROOT user, because root ignores file
+    # permission bits and one test forces a write to fail by making its target
+    # read-only:
+    #
+    #   --- FAIL: TestApplyChangesFailedWriteRestoresBackup
+    #       applyChanges should fail writing a read-only file
+    #
+    # As root that write succeeds and the assertion does not. Nobody runs this
+    # CLI as root, so the behaviour the test asserts is the real one and the
+    # environment is what should match it.
+    #
+    # Only this step, deliberately. The agent checks out as root, so a non-root
+    # container cannot write into the workspace — which lint and build both do
+    # (`go build -o driverforge`, and VCS stamping reading .git). Testing does
+    # not: the caches are in /tmp and test binaries build under TMPDIR.
+    #
+    # propagate-uid-gid does the wrong thing here — it propagates the AGENT's
+    # uid, and the hosted agents are root, so it faithfully propagated root.
+    #
+    # Spelled out rather than merged onto the anchor above: a YAML merge key is
+    # not something this pipeline should depend on the parser supporting.
+    plugins:
+      - docker#v5.11.0:
+          image: golang:1.25.8
+          user: "1000:1000"
+          environment:
+            - HOME=/tmp
+            - GOCACHE=/tmp/go-build
+            - GOMODCACHE=/tmp/go-mod
     command: go test -race -shuffle=on ./...
