@@ -47,8 +47,8 @@ jobs:
       # This workflow is workflow_dispatch ONLY, so a blocked run always means a
       # person asked for something that is not going to happen — it fails rather
       # than skips, because a skipped job is grey and sends no mail. Workflows
-      # that also fire automatically (release.yml, tap-readmes.yml) gate on a
-      # guard job instead, so their automatic runs skip quietly.
+      # that also fires automatically (release.yml, on a tag) gates on a
+      # guard job instead, so its automatic runs skip quietly.
       #
       # It is read over the API rather than tested in a job-level `if:`, because
       # custom properties are not in the `github` context (only `vars` is).
