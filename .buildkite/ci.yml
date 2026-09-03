@@ -1,7 +1,8 @@
 # CI for the Driverforge CLI.
 #
 # Runs on every pull request, including those from forks: gofmt and vet, a
-# build, then the test suite under the race detector.
+# build, the test suite under the race detector, and a check for known
+# vulnerabilities reachable from the code.
 #
 # Reproduce any of it locally — the commands are the same ones CI runs:
 #
@@ -9,9 +10,14 @@
 #   make vet
 #   make build
 #   go test -race -shuffle=on ./...
+#   make vuln
 #
-# The Go toolchain is pinned to the version in go.mod, so a pull request fails
-# for its own change rather than for a toolchain that moved underneath it.
+# THE IMAGE PIN BELOW IS THE TOOLCHAIN, not go.mod's `go` directive. The
+# official golang images set GOTOOLCHAIN=local, so Go builds with exactly what
+# the image ships. go.mod is a floor for consumers; the pin is what compiles
+# here. It is also a security input: the vulnerability check reports standard
+# library advisories against the version that did the build, so bumping the
+# pin is how those get fixed.
 
 agents:
   queue: linux-small-public
@@ -25,7 +31,7 @@ steps:
     timeout_in_minutes: 15
     plugins: &go
       - docker#v5.11.0:
-          image: golang:1.25.8
+          image: golang:1.25.14
           environment:
             # The agent's home is not the container's. Without these, Go has
             # nowhere writable to cache and fails before compiling anything.
@@ -77,10 +83,21 @@ steps:
     # not something this pipeline should depend on the parser supporting.
     plugins:
       - docker#v5.11.0:
-          image: golang:1.25.8
+          image: golang:1.25.14
           user: "1000:1000"
           environment:
             - HOME=/tmp
             - GOCACHE=/tmp/go-build
             - GOMODCACHE=/tmp/go-mod
     command: go test -race -shuffle=on ./...
+
+  # Symbol-level reachability, standard library included. A failure with no
+  # diff usually means a new advisory was published; see `make vuln`.
+  - label: ':lock: Vulnerabilities'
+    key: vuln
+    notify:
+      - github_commit_status:
+          context: buildkite/vuln
+    timeout_in_minutes: 15
+    plugins: *go
+    command: make vuln

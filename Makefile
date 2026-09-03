@@ -83,6 +83,10 @@ cover: ## Run tests with a coverage summary
 vet: ## Run go vet
 	go vet ./...
 
+.PHONY: vuln
+vuln: ## Report reachable known vulnerabilities (govulncheck)
+	go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
 .PHONY: fmt
 fmt: ## Format all Go sources
 	gofmt -w .
