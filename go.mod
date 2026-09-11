@@ -7,7 +7,7 @@ require (
 	charm.land/bubbletea/v2 v2.0.9
 	charm.land/huh/v2 v2.0.3
 	charm.land/lipgloss/v2 v2.0.6
-	github.com/centrifugal/centrifuge-go v0.12.0
+	github.com/centrifugal/centrifuge-go v0.12.1
 	github.com/charmbracelet/colorprofile v0.4.3
 	github.com/getsentry/sentry-go v0.48.0
 	github.com/muesli/termenv v0.16.0
@@ -24,7 +24,7 @@ require (
 	github.com/atotto/clipboard v0.1.4 // indirect
 	github.com/aymanbagabas/go-osc52/v2 v2.0.1 // indirect
 	github.com/catppuccin/go v0.3.0 // indirect
-	github.com/centrifugal/protocol v0.19.2 // indirect
+	github.com/centrifugal/protocol v0.21.0 // indirect
 	github.com/charmbracelet/ultraviolet v0.0.0-20260811164956-006e29f97886 // indirect
 	github.com/charmbracelet/x/ansi v0.11.8 // indirect
 	github.com/charmbracelet/x/exp/ordered v0.1.0 // indirect
