@@ -85,7 +85,7 @@ vet: ## Run go vet
 
 .PHONY: vuln
 vuln: ## Report reachable known vulnerabilities (govulncheck)
-	go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+	go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
 
 .PHONY: fmt
 fmt: ## Format all Go sources
