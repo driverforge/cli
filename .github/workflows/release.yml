@@ -182,7 +182,7 @@ jobs:
       # Installed rather than assumed: GoReleaser shells out to it and would fail
       # the release if it were missing from the image.
       - name: Install syft
-        uses: anchore/sbom-action/download-syft@v0.24.0
+        uses: anchore/sbom-action/download-syft@v0.24.2
 
       - uses: goreleaser/goreleaser-action@v7
         with:
