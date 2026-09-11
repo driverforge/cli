@@ -30,7 +30,7 @@ steps:
           context: buildkite/lint
     timeout_in_minutes: 15
     plugins: &go
-      - docker#v5.11.0:
+      - docker#v5.14.0:
           image: golang:1.27.1
           environment:
             # The agent's home is not the container's. Without these, Go has
@@ -82,7 +82,7 @@ steps:
     # Spelled out rather than merged onto the anchor above: a YAML merge key is
     # not something this pipeline should depend on the parser supporting.
     plugins:
-      - docker#v5.11.0:
+      - docker#v5.14.0:
           image: golang:1.27.1
           user: "1000:1000"
           environment:
