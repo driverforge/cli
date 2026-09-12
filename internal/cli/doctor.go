@@ -93,7 +93,7 @@ func runDoctor(ctx context.Context, out io.Writer, yes bool) error {
 			return clierr.Silent()
 		}
 	}
-	if err := executeFileChanges(ctx, out, proj, "", changes); err != nil {
+	if err := executeFileChanges(ctx, out, proj, "", "", changes); err != nil {
 		return err
 	}
 	fmt.Fprintf(out, "\n%s\n", ui.Celebrate("Repaired — this driver is set up again."))

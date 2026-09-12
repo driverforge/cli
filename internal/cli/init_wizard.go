@@ -29,10 +29,12 @@ const defaultInitCommitMessage = "chore: add Anvil developer tooling support"
 
 // gatherBranchIntent decides whether (and what) git branch to create and what
 // commit message to use for the changes, without touching the repo — that
-// happens in the execute phase. Returns ("", "") when not in a repo or the
-// user declines a branch; an empty commitMsg (user cleared the prompt) means
-// branch-only, leaving the changes uncommitted.
-func gatherBranchIntent(ctx context.Context, out io.Writer, projectDir string) (branch, commitMsg string, err error) {
+// happens in the execute phase. defaultBranch and defaultCommitMsg seed the
+// prompts (init and the SDK upgrade share the wizard and differ only there).
+// Returns ("", "") when not in a repo or the user declines a branch; an empty
+// commitMsg (user cleared the prompt) means branch-only, leaving the changes
+// uncommitted.
+func gatherBranchIntent(ctx context.Context, out io.Writer, projectDir, defaultBranch, defaultCommitMsg string) (branch, commitMsg string, err error) {
 	root, ok := gitrepo.Root(ctx, projectDir)
 	if !ok {
 		return "", "", nil
@@ -55,7 +57,7 @@ func gatherBranchIntent(ctx context.Context, out io.Writer, projectDir string) (
 		fmt.Fprintln(out, ui.Skipped("Git branch: none"))
 		return "", "", nil
 	}
-	name, err := ui.PromptText("Branch name", freeBranchName(ctx, root, "driverforge-init"))
+	name, err := ui.PromptText("Branch name", freeBranchName(ctx, root, defaultBranch))
 	if err != nil {
 		return "", "", err
 	}
@@ -81,7 +83,7 @@ func gatherBranchIntent(ctx context.Context, out io.Writer, projectDir string) (
 
 	// The branch exists to hold these changes — commit them onto it so review
 	// and revert are one git operation. Clearing the message opts out.
-	commitMsg, err = ui.PromptText("Commit message", defaultInitCommitMessage)
+	commitMsg, err = ui.PromptText("Commit message", defaultCommitMsg)
 	if err != nil {
 		return "", "", err
 	}

@@ -371,9 +371,10 @@ func sdkRow(ctx context.Context, out io.Writer) compRow {
 	//
 	// A drifted project is NOT offered an inline fix. Restoring it rewrites the
 	// entry Lua, the manifest and the squishy, and the picker's contract is that
-	// selecting a row IS the consent — it prompts for nothing and shows no diff.
-	// That is fine for swapping one vendored file and wrong for patching source,
-	// so this row routes to `doctor`, which reviews before it writes.
+	// selecting a row IS the consent — it shows no diff and asks nothing about
+	// the change itself (only whether to branch for it). That is fine for
+	// swapping one vendored file and wrong for patching source, so this row
+	// routes to `doctor`, which reviews before it writes.
 	if diag := initdriver.Diagnose(proj, len(cfg.BuildTargets) > 0); !diag.Healthy() {
 		r.current = "incomplete"
 		if len(diag.Failed()) == 1 && diag.Failed()[0].Name == "embedded SDK" {

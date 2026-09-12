@@ -69,9 +69,11 @@ func handleAlreadyInit(out io.Writer, proj project.Project, cfg *driverforgeconf
 // runSDKUpdate re-embeds the Driverforge SDK at the version resolved from constraint
 // (empty/"latest" → the newest published; an exact x.y.z → that build) and bumps
 // .driverforge/config.json. It is the engine behind the `driverforge upgrade`
-// picker's SDK row — selecting the row there is the consent, so it prompts for
-// nothing. The picker already withholds the row on a dirty git tree; the check
-// here is the backstop for files that changed after the picker opened.
+// picker's SDK row — selecting the row there is the consent to the change
+// itself; the only prompts are init's branch wizard (an optional branch and
+// commit to hold the change), asked once it is known something will change.
+// The picker already withholds the row on a dirty git tree; the check here is
+// the backstop for files that changed after the picker opened.
 func runSDKUpdate(ctx context.Context, out io.Writer, proj project.Project, cfg *driverforgeconfig.Config, constraint string) error {
 	if err := requireCleanTree(ctx, proj.Dir, "The SDK upgrade"); err != nil {
 		return err
@@ -118,11 +120,28 @@ func runSDKUpdate(ctx context.Context, out io.Writer, proj project.Project, cfg 
 		return nil
 	}
 
-	if err := executeFileChanges(ctx, out, proj, "", changes); err != nil {
+	// Same offer init makes: a branch (and commit) so the upgrade is one
+	// reviewable, revertable unit rather than loose edits on the current branch.
+	defBranch, defMsg := sdkUpdateBranchDefaults(target)
+	branch, commitMsg, err := branchIntent(ctx, out, proj.Dir, defBranch, defMsg)
+	if err != nil {
+		return err
+	}
+	if err := executeFileChanges(ctx, out, proj, branch, commitMsg, changes); err != nil {
 		return err
 	}
 	fmt.Fprintf(out, "\n%s\n", ui.Celebrate(fmt.Sprintf("Updated to Driverforge SDK %s!", target)))
 	return nil
+}
+
+// branchIntent is the branch wizard runSDKUpdate consults. It is a variable so
+// tests can stand in for the interactive prompts, which need a terminal.
+var branchIntent = gatherBranchIntent
+
+// sdkUpdateBranchDefaults are the branch name and commit message the SDK
+// upgrade's branch wizard suggests for an update to version.
+func sdkUpdateBranchDefaults(version string) (branch, commitMsg string) {
+	return "driverforge-sdk-" + version, "chore: update Driverforge SDK to " + version
 }
 
 // resolveSDKTarget turns a constraint into the concrete version to install. Empty

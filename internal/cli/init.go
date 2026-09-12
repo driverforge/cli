@@ -239,7 +239,7 @@ func runInit(ctx context.Context, out io.Writer, projectDir, projectRef string) 
 		return err
 	}
 
-	branch, commitMsg, err := gatherBranchIntent(ctx, out, proj.Dir)
+	branch, commitMsg, err := gatherBranchIntent(ctx, out, proj.Dir, "driverforge-init", defaultInitCommitMessage)
 	if err != nil {
 		return err
 	}

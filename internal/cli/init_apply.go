@@ -124,10 +124,12 @@ func executeErr(err error) error {
 	return loginAwareErr(err)
 }
 
-// executeFileChanges runs the confirmed file writes (and optional git branch) as a
-// live-progress step list — the shared tail of init's execute phase and SDK
-// updates.
-func executeFileChanges(ctx context.Context, out io.Writer, proj project.Project, branch string, changes []initdriver.Change) error {
+// executeFileChanges runs the confirmed file writes as a live-progress step
+// list, optionally on a new git branch and, when commitMsg is also set,
+// committed there as one revertable commit of exactly the written paths. It is
+// the shared tail of doctor repairs and SDK updates (init has its own, whose
+// changes are only known mid-step).
+func executeFileChanges(ctx context.Context, out io.Writer, proj project.Project, branch, commitMsg string, changes []initdriver.Change) error {
 	var steps []ui.Step
 	if branch != "" {
 		b := branch
@@ -147,6 +149,23 @@ func executeFileChanges(ctx context.Context, out io.Writer, proj project.Project
 		Label: "Applying file changes",
 		Run:   func() error { return applyChanges(ch) },
 	})
+	if branch != "" && commitMsg != "" {
+		msg := commitMsg
+		steps = append(steps, ui.Step{
+			Label: "Committing changes",
+			Run: func() error {
+				root, ok := gitrepo.Root(ctx, proj.Dir)
+				if !ok {
+					return fmt.Errorf("not a git repository")
+				}
+				paths := make([]string, 0, len(ch))
+				for _, c := range ch {
+					paths = append(paths, c.AbsPath)
+				}
+				return gitrepo.Commit(ctx, root, msg, paths)
+			},
+		})
+	}
 	if err := ui.RunSteps(ctx, out, ui.Interactive(flagNoTUI), steps); err != nil {
 		return executeErr(err)
 	}
