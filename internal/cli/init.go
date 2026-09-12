@@ -71,7 +71,7 @@ func initPreflight(ctx context.Context, out io.Writer, projectDir string) (proj 
 	if err := requireLogin(ctx); err != nil {
 		return project.Project{}, false, err
 	}
-	if err := requireCleanTree(ctx, proj.Dir); err != nil {
+	if err := requireCleanTree(ctx, proj.Dir, "driverforge init"); err != nil {
 		return project.Project{}, false, err
 	}
 	return proj, false, nil

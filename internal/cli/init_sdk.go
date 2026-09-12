@@ -70,9 +70,10 @@ func handleAlreadyInit(out io.Writer, proj project.Project, cfg *driverforgeconf
 // (empty/"latest" → the newest published; an exact x.y.z → that build) and bumps
 // .driverforge/config.json. It is the engine behind the `driverforge upgrade`
 // picker's SDK row — selecting the row there is the consent, so it prompts for
-// nothing (a dirty git tree is still refused up front).
+// nothing. The picker already withholds the row on a dirty git tree; the check
+// here is the backstop for files that changed after the picker opened.
 func runSDKUpdate(ctx context.Context, out io.Writer, proj project.Project, cfg *driverforgeconfig.Config, constraint string) error {
-	if err := requireCleanTree(ctx, proj.Dir); err != nil {
+	if err := requireCleanTree(ctx, proj.Dir, "The SDK upgrade"); err != nil {
 		return err
 	}
 

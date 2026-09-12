@@ -153,3 +153,57 @@ func TestUpgradePickerViewShape(t *testing.T) {
 		t.Errorf("space should mark the row selected:\n%s", v)
 	}
 }
+
+// A blocked row (an SDK update behind a dirty working tree) shows both
+// versions and its note but can't be reached or toggled, while the CLI and
+// agent rows around it stay independently selectable.
+func TestUpgradePickerBlockedRowIsUnselectable(t *testing.T) {
+	rows := []UpgradeRow{
+		{Name: "driverforge CLI", Current: "0.4.1", Latest: "0.5.0", Note: "update available", State: UpgradeAvailable},
+		{Name: "Anvil Agent", Current: "2026072104", Latest: "2026072201", Note: "update available", State: UpgradeAvailable},
+		{Name: "Driverforge SDK", Current: "0.3.0", Latest: "0.5.0", Note: "update available — Commit or stash your changes to upgrade the SDK.", State: UpgradeBlocked},
+	}
+	m := NewUpgradePicker(rows, nil)
+
+	v := m.View().Content
+	for _, want := range []string{"0.3.0 → 0.5.0", "Commit or stash your changes to upgrade the SDK."} {
+		if !strings.Contains(v, want) {
+			t.Errorf("view missing %q:\n%s", want, v)
+		}
+	}
+
+	// Cursor movement never lands on the blocked row.
+	if m.cursor != 0 {
+		t.Fatalf("cursor = %d, want 0", m.cursor)
+	}
+	m.Update(key("j"))
+	m.Update(tea.KeyPressMsg{Code: tea.KeySpace}) // select the agent
+	if m.cursor != 1 {
+		t.Fatalf("cursor after j = %d, want 1", m.cursor)
+	}
+	m.Update(key("j"))
+	if m.cursor != 0 {
+		t.Fatalf("cursor after second j = %d, want 0 (wrapping past the blocked SDK row)", m.cursor)
+	}
+	m.Update(tea.KeyPressMsg{Code: tea.KeySpace}) // select the CLI
+
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	got := m.Chosen()
+	if len(got) != 2 || got[0] != 0 || got[1] != 1 {
+		t.Fatalf("Chosen() = %v, want [0 1]: CLI and agent, never the blocked SDK", got)
+	}
+}
+
+// With only a blocked row there is nothing to land on; the picker must still
+// construct and render without panicking.
+func TestUpgradePickerOnlyBlockedRow(t *testing.T) {
+	m := NewUpgradePicker([]UpgradeRow{
+		{Name: "Driverforge SDK", Current: "0.3.0", Latest: "0.5.0", Note: "blocked", State: UpgradeBlocked},
+	}, nil)
+	m.Update(key("j"))
+	m.Update(tea.KeyPressMsg{Code: tea.KeySpace})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if got := m.Chosen(); len(got) != 0 {
+		t.Fatalf("Chosen() = %v, want empty", got)
+	}
+}

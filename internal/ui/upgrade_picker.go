@@ -10,7 +10,9 @@ import (
 
 // UpgradeState classifies a component row for the upgrade picker. Only
 // UpgradeAvailable rows are selectable; the rest render dimmed as status
-// context.
+// context. UpgradeBlocked is an update that exists but can't be applied right
+// now (the SDK with a dirty working tree): it shows both versions like an
+// available row, but dimmed, with the Note saying what would unblock it.
 type UpgradeState int
 
 const (
@@ -18,6 +20,7 @@ const (
 	UpgradeCurrent                       // ✓ up to date
 	UpgradeUnknown                       // ⚠ couldn't check
 	UpgradeNA                            // – not applicable
+	UpgradeBlocked                       // ⬆ update available, but not applicable until the Note is resolved
 )
 
 // UpgradeRow is one component in the upgrade picker, fully composed by the
@@ -170,10 +173,10 @@ func (m *UpgradePickerModel) View() tea.View {
 	return tea.NewView(b.String())
 }
 
-// versionCell is the unstyled version column: "current → latest" for an
-// updatable row, just the current version otherwise.
+// versionCell is the unstyled version column: "current → latest" when a newer
+// version exists (selectable or blocked), just the current version otherwise.
 func (m *UpgradePickerModel) versionCell(r UpgradeRow) string {
-	if r.State == UpgradeAvailable {
+	if r.State == UpgradeAvailable || r.State == UpgradeBlocked {
 		return r.Current + " → " + r.Latest
 	}
 	return r.Current
@@ -190,6 +193,8 @@ func (m *UpgradePickerModel) renderRow(i int, r UpgradeRow, nameW, verW int) str
 			icon = "✓"
 		case UpgradeUnknown:
 			icon = "⚠"
+		case UpgradeBlocked:
+			icon = "⬆"
 		default:
 			icon = "–"
 		}

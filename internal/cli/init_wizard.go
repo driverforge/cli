@@ -136,21 +136,32 @@ func gatherVersioningScheme(out io.Writer, proj project.Project) (string, error)
 // requireCleanTree refuses to proceed when the project is in a git repo with a
 // dirty work tree, so Driverforge's changes land in isolation (reviewable and easy to
 // revert) rather than mixed with the user's uncommitted work — and so there's a
-// committed baseline to branch from. Non-git projects are left alone.
-func requireCleanTree(ctx context.Context, projectDir string) error {
-	root, ok := gitrepo.Root(ctx, projectDir)
-	if !ok {
-		return nil // not a git repo — nothing to enforce
-	}
-	clean, err := gitrepo.IsClean(ctx, root)
-	if err != nil || clean {
-		return nil // can't tell, or already clean — proceed
+// committed baseline to branch from. Non-git projects are left alone. what
+// names the operation in the error, e.g. "driverforge init" or "the SDK
+// upgrade" — the same rule guards both, and the message must say which one
+// refused.
+func requireCleanTree(ctx context.Context, projectDir, what string) error {
+	if treeClean(ctx, projectDir) {
+		return nil
 	}
 	return &clierr.UserError{
 		Title:   "Git working tree isn't clean",
-		Message: "driverforge init changes your driver, so it needs a clean git working tree first",
+		Message: what + " changes your driver, so it needs a clean git working tree first",
 		Hint:    "commit or stash your changes (or commit the initial project if it isn't tracked yet), then re-run",
 	}
+}
+
+// treeClean reports whether projectDir may be modified under the clean-tree
+// rule: true outside a git repo, when git can't be consulted, or when the work
+// tree has no pending changes. Only a repo that git can positively report as
+// dirty is refused.
+func treeClean(ctx context.Context, projectDir string) bool {
+	root, ok := gitrepo.Root(ctx, projectDir)
+	if !ok {
+		return true // not a git repo — nothing to enforce
+	}
+	clean, err := gitrepo.IsClean(ctx, root)
+	return err != nil || clean // can't tell, or already clean — proceed
 }
 
 // requireLogin fails fast with a friendly message when the user isn't logged in

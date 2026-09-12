@@ -49,6 +49,7 @@ func TestBuildUpgradeRows(t *testing.T) {
 		{name: "Driverforge SDK", current: "0.3.0", latest: "0.5.0", note: "update available", state: stateUpdate,
 			notesURL: "https://github.com/driverforge/control4-sdk/releases/tag/v0.5.0"},
 		{name: "Anvil Agent", note: "no controller selected", state: stateNA},
+		{name: "Driverforge SDK", current: "0.3.0", latest: "0.5.0", note: "update available — " + sdkDirtyTreeNote, state: stateBlocked},
 	}
 	got := buildUpgradeRows(rows)
 
@@ -61,7 +62,7 @@ func TestBuildUpgradeRows(t *testing.T) {
 	if !strings.Contains(got[2].NotesURL, "tag/v0.5.0") {
 		t.Errorf("sdk notes URL = %q", got[2].NotesURL)
 	}
-	wantStates := []ui.UpgradeState{ui.UpgradeAvailable, ui.UpgradeAvailable, ui.UpgradeAvailable, ui.UpgradeNA}
+	wantStates := []ui.UpgradeState{ui.UpgradeAvailable, ui.UpgradeAvailable, ui.UpgradeAvailable, ui.UpgradeNA, ui.UpgradeBlocked}
 	for i, w := range wantStates {
 		if got[i].State != w {
 			t.Errorf("row %d state = %v, want %v", i, got[i].State, w)
@@ -106,5 +107,14 @@ func TestUpgradeActionAlwaysOffersACommand(t *testing.T) {
 				t.Errorf("selfUpgradable = %v, want %v", selfUpgradable, c.wantSelfUpdate)
 			}
 		})
+	}
+}
+
+// A blocked row renders in the plain table like an available one — the
+// update exists — with the note explaining why it isn't offered.
+func TestStatusCellBlocked(t *testing.T) {
+	got := statusCell(compRow{state: stateBlocked, note: "update available — " + sdkDirtyTreeNote})
+	if !strings.Contains(got, "⬆") || !strings.Contains(got, sdkDirtyTreeNote) {
+		t.Errorf("statusCell = %q", got)
 	}
 }

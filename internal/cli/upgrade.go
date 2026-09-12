@@ -51,7 +51,15 @@ const (
 	stateUpdate             // a newer version is available
 	stateUnknown            // couldn't determine (unreachable, sign-in issue, …)
 	stateNA                 // not applicable in this context (no controller, not a driver)
+	stateBlocked            // a newer version is available but can't be applied right now
 )
+
+// sdkDirtyTreeNote is what the SDK row says when an update exists but the
+// project's git working tree is dirty. The upgrade rewrites tracked files, so
+// it needs a clean tree the same way init does; rather than let the row be
+// selected and then refuse mid-run (after the CLI and agent upgrades have
+// already happened), the picker withholds it and says what would unblock it.
+const sdkDirtyTreeNote = "Commit or stash your changes to upgrade the SDK."
 
 // sdkReleaseNotesURL is the GitHub release page for an SDK version (tags are
 // v-prefixed, e.g. v0.5.0) — the picker's release-notes link.
@@ -179,6 +187,8 @@ func buildUpgradeRows(rows []compRow) []ui.UpgradeRow {
 		switch r.state {
 		case stateUpdate:
 			state = ui.UpgradeAvailable
+		case stateBlocked:
+			state = ui.UpgradeBlocked
 		case stateUpToDate:
 			state = ui.UpgradeCurrent
 		case stateUnknown:
@@ -219,7 +229,7 @@ func statusCell(r compRow) string {
 	switch r.state {
 	case stateUpToDate:
 		icon, paint = "✓", ui.StatusOK
-	case stateUpdate:
+	case stateUpdate, stateBlocked:
 		icon, paint = "⬆", ui.StatusWarn
 	case stateUnknown:
 		icon, paint = "⚠", ui.StatusWarn
@@ -386,11 +396,25 @@ func sdkRow(ctx context.Context, out io.Writer) compRow {
 		r.state, r.note = stateUpToDate, "up to date"
 		return r
 	}
-	// Reaching here means the setup is intact and only the version is behind —
-	// exactly the case runSDKUpdate was built for: swap the bundle, bump config.
+	return sdkUpdateRow(ctx, out, r, proj, cfg, rel.Version)
+}
+
+// sdkUpdateRow completes an SDK row whose setup is intact and whose version is
+// behind latest — exactly the case runSDKUpdate was built for: swap the bundle,
+// bump config. The version pair and release notes are shown either way; the
+// row is selectable only when the project's git working tree is clean, since
+// runSDKUpdate refuses a dirty one. Checking here, when the row is built, means
+// the picker never offers an SDK upgrade that would fail after the CLI and
+// agent upgrades chosen alongside it have already run.
+func sdkUpdateRow(ctx context.Context, out io.Writer, r compRow, proj project.Project, cfg *driverforgeconfig.Config, latest string) compRow {
+	r.latest = latest
+	r.notesURL = fmt.Sprintf(sdkReleaseNotesURL, latest)
+	if !treeClean(ctx, proj.Dir) {
+		r.state, r.note = stateBlocked, "update available — "+sdkDirtyTreeNote
+		return r
+	}
 	r.state, r.note, r.cmd = stateUpdate, "update available", "driverforge upgrade"
-	r.notesURL = fmt.Sprintf(sdkReleaseNotesURL, rel.Version)
-	p, c, target := proj, cfg, rel.Version
+	p, c, target := proj, cfg, latest
 	r.run = func(ctx context.Context) error { return runSDKUpdate(ctx, out, p, c, target) }
 	return r
 }
