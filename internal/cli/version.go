@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"path/filepath"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/driverforge/cli/internal/agent"
 	"github.com/driverforge/cli/internal/buildinfo"
 	"github.com/driverforge/cli/internal/driverforgeapi"
 	"github.com/driverforge/cli/internal/driverforgeconfig"
@@ -124,14 +126,13 @@ func driverforgeRows(ctx context.Context) []ui.VersionRow {
 // that can't be addressed or doesn't answer reports as unreachable.
 func controllerRows(ctx context.Context, dev orgctx.Device) (name string, rows []ui.VersionRow) {
 	unreachable := []ui.VersionRow{{Label: "Anvil Agent", Value: "unreachable"}}
-	cl, err := agentForDevice(ctx, dev)
-	if err != nil {
-		return dev.Name, unreachable
-	}
 	hctx, cancel := context.WithTimeout(ctx, versionHealthTimeout)
 	defer cancel()
-	h, err := cl.Health(hctx)
+	_, h, err := dialAgent(hctx, dev)
 	if err != nil {
+		if errors.Is(err, agent.ErrFingerprintMismatch) {
+			return dev.Name, []ui.VersionRow{{Label: "Anvil Agent", Value: "TLS certificate mismatch"}}
+		}
 		return dev.Name, unreachable
 	}
 	rows = []ui.VersionRow{{Label: "Anvil Agent", Value: firstNonEmpty(h.AgentVersion, "unknown")}}

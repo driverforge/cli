@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/driverforge/cli/internal/agent"
+	"github.com/driverforge/cli/internal/orgctx"
 )
 
 // healthzDown makes healthzServing refuse a poll instead of answering it —
@@ -42,7 +43,7 @@ func healthzServing(t *testing.T, version func(n int) string) (*agent.Client, fu
 func TestResolveSelfDeployConfirmsOnVersionFlip(t *testing.T) {
 	cl, hits := healthzServing(t, func(int) string { return "2026080301" })
 
-	got := resolveSelfDeploy(context.Background(), cl, "2026072104")
+	got := resolveSelfDeploy(context.Background(), cl, orgctx.Device{}, "2026072104")
 
 	if got.State != agent.StateConfirmed {
 		t.Fatalf("State = %v, want %v", got.State, agent.StateConfirmed)
@@ -73,7 +74,7 @@ func TestResolveSelfDeployPollsUntilVersionFlips(t *testing.T) {
 		}
 	})
 
-	got := resolveSelfDeploy(context.Background(), cl, "2026072104")
+	got := resolveSelfDeploy(context.Background(), cl, orgctx.Device{}, "2026072104")
 
 	if got.State != agent.StateConfirmed {
 		t.Fatalf("State = %v, want %v", got.State, agent.StateConfirmed)
@@ -96,7 +97,7 @@ func TestResolveSelfDeployUnconfirmedWhenWindowCloses(t *testing.T) {
 	cancel()
 	cl, _ := healthzServing(t, func(int) string { return "2026080301" })
 
-	got := resolveSelfDeploy(ctx, cl, "2026072104")
+	got := resolveSelfDeploy(ctx, cl, orgctx.Device{}, "2026072104")
 
 	if got.State != agent.StateUnconfirmed {
 		t.Fatalf("State = %v, want %v", got.State, agent.StateUnconfirmed)
@@ -119,7 +120,7 @@ func TestResolveSelfDeployIgnoresEmptyVersion(t *testing.T) {
 	defer cancel()
 	cl, _ := healthzServing(t, func(int) string { return "" }) // healthy, but reports no version
 
-	got := resolveSelfDeploy(ctx, cl, "2026072104")
+	got := resolveSelfDeploy(ctx, cl, orgctx.Device{}, "2026072104")
 
 	if got.State == agent.StateConfirmed {
 		t.Fatalf("an empty agentVersion must not confirm the deploy (got %+v)", got)
@@ -137,7 +138,7 @@ func TestResolveSelfDeployDoesNotConfirmUnchangedVersion(t *testing.T) {
 	defer cancel()
 	cl, _ := healthzServing(t, func(int) string { return "2026072104" })
 
-	got := resolveSelfDeploy(ctx, cl, "2026072104")
+	got := resolveSelfDeploy(ctx, cl, orgctx.Device{}, "2026072104")
 
 	if got.State == agent.StateConfirmed {
 		t.Fatalf("an unchanged version must not confirm the deploy (got %+v)", got)

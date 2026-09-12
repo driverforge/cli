@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"sync"
@@ -10,6 +11,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/spf13/cobra"
 
+	"github.com/driverforge/cli/internal/agent"
 	"github.com/driverforge/cli/internal/agentrelease"
 	"github.com/driverforge/cli/internal/auth"
 	"github.com/driverforge/cli/internal/buildinfo"
@@ -305,14 +307,9 @@ func agentRow(ctx context.Context, out io.Writer) compRow {
 		r.state, r.note = stateNA, "no controller selected"
 		return r
 	}
-	cl, err := agentForDevice(ctx, dev)
-	if err != nil {
-		r.state, r.note = stateUnknown, "couldn't check — "+checkReason(err)
-		return r
-	}
 	hctx, cancel := context.WithTimeout(ctx, versionHealthTimeout)
 	defer cancel()
-	h, err := cl.Health(hctx)
+	_, h, err := dialAgent(hctx, dev)
 	if err != nil {
 		r.state, r.note = stateUnknown, "couldn't check — "+checkReason(err)
 		return r
@@ -402,6 +399,9 @@ func sdkRow(ctx context.Context, out io.Writer) compRow {
 // operational condition we can name (a sign-in issue, after Fix A), anything else
 // is treated as the component being unreachable.
 func checkReason(err error) string {
+	if errors.Is(err, agent.ErrFingerprintMismatch) {
+		return "TLS certificate mismatch"
+	}
 	if clierr.IsUser(err) {
 		return "sign-in issue"
 	}

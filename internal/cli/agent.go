@@ -91,14 +91,14 @@ func runAgentUpgradeTUI(ctx context.Context, cl *agent.Client, dev orgctx.Device
 	// The agent upgrade records no sync baseline (it deploys the agent's own
 	// .c4z, not a user driver), so the terminal state is discarded.
 	_, err := runDeployProgram(ctx, dev, "Upgrading the Anvil Agent on", expectedVersion, func(send func(agent.DeployEvent)) (agent.DeployEvent, error) {
-		return streamDeploy(ctx, cl, filename, hash, sha, body, optIn, oldVersion, send)
+		return streamDeploy(ctx, cl, dev, filename, hash, sha, body, optIn, oldVersion, send)
 	})
 	return err
 }
 
 func runAgentUpgradePlain(ctx context.Context, out io.Writer, cl *agent.Client, dev orgctx.Device, filename, hash, sha string, body io.Reader, optIn bool, oldVersion, expectedVersion string) error {
 	fmt.Fprintf(out, "\nUpgrading the Anvil Agent on %s (%s → %s)…\n", dev.Name, oldVersion, expectedVersion)
-	terminal, sErr := streamDeploy(ctx, cl, filename, hash, sha, body, optIn, oldVersion, ui.DeployPlain(out))
+	terminal, sErr := streamDeploy(ctx, cl, dev, filename, hash, sha, body, optIn, oldVersion, ui.DeployPlain(out))
 	if sErr != nil {
 		return friendlyDeployErr(dev, sErr)
 	}

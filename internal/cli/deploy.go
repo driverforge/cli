@@ -299,6 +299,13 @@ func deployFramedTo(ctx context.Context, out io.Writer, opts c4z.Options, config
 	return nil
 }
 
+type deployProgress interface {
+	Step(string)
+	Logf(string, ...any)
+	Warnf(string, ...any)
+	Row(string, string)
+}
+
 // deployStreamInFrame streams the deploy reporting progress into the frame.
 // The spinner line always carries a present-tense "what's happening now" label
 // derived from the deploy state — the agent's Step strings describe the state
@@ -306,10 +313,10 @@ func deployFramedTo(ctx context.Context, out io.Writer, opts c4z.Options, config
 // a spinner. The terminal event maps to the same outcomes the plain path uses
 // — a failure error, an amber warning for confirmed-with-errors / unconfirmed,
 // or the deployed-version success label.
-func deployStreamInFrame(ctx context.Context, f *ui.Frame, cl *agent.Client, dev orgctx.Device, filename, hash string, body io.Reader, optIn bool, oldAgentVersion, localVersion string) (agent.DeployState, error) {
+func deployStreamInFrame(ctx context.Context, f deployProgress, cl *agent.Client, dev orgctx.Device, filename, hash string, body io.Reader, optIn bool, oldAgentVersion, localVersion string) (agent.DeployState, error) {
 	f.Step("Uploading the driver…")
 	var lastStep string
-	terminal, sErr := streamDeploy(ctx, cl, filename, hash, "", body, optIn, oldAgentVersion, func(e agent.DeployEvent) {
+	terminal, sErr := streamDeploy(ctx, cl, dev, filename, hash, "", body, optIn, oldAgentVersion, func(e agent.DeployEvent) {
 		if e.Terminal {
 			return
 		}
@@ -384,6 +391,10 @@ func deployedLabel(version string) string {
 	return "Deployed version " + version
 }
 
+// The constructor is replaceable so the real event loop can run with headless
+// input/output in tests, without requiring a controlling terminal.
+var newDeployProgram = tea.NewProgram
+
 // runDeployProgram drives a DeployModel Bubble Tea program over a streamed
 // deploy-shaped operation: start launches the stream (reporting progress via
 // send) and returns its terminal event. Shared by deploy, agent upgrade, and
@@ -391,7 +402,7 @@ func deployedLabel(version string) string {
 // decisions) alongside any error.
 func runDeployProgram(ctx context.Context, dev orgctx.Device, action, localVersion string, start func(send func(agent.DeployEvent)) (agent.DeployEvent, error)) (agent.DeployState, error) {
 	m := ui.NewDeployModel(action, dev.Name)
-	p := tea.NewProgram(m, tea.WithContext(ctx))
+	p := newDeployProgram(m, tea.WithContext(ctx))
 	go func() {
 		terminal, sErr := start(func(e agent.DeployEvent) { p.Send(ui.DeployEventMsg(e)) })
 		p.Send(deployDoneMsg(dev, terminal, sErr, localVersion))
@@ -413,7 +424,7 @@ func runDeployProgram(ctx context.Context, dev orgctx.Device, action, localVersi
 // error.
 func runDeployPlain(ctx context.Context, out io.Writer, cl *agent.Client, dev orgctx.Device, filename, hash string, body io.Reader, optIn bool, oldAgentVersion, localVersion string) (agent.DeployState, error) {
 	fmt.Fprintf(out, "\nDeploying %s to %s…\n", filename, dev.Name)
-	terminal, sErr := streamDeploy(ctx, cl, filename, hash, "", body, optIn, oldAgentVersion, ui.DeployPlain(out))
+	terminal, sErr := streamDeploy(ctx, cl, dev, filename, hash, "", body, optIn, oldAgentVersion, ui.DeployPlain(out))
 	if sErr != nil {
 		return "", friendlyDeployErr(dev, sErr)
 	}
@@ -438,7 +449,7 @@ func runDeployPlain(ctx context.Context, out io.Writer, cl *agent.Client, dev or
 // streamDeploy runs the streamed deploy and, for a self-deploy (the agent
 // reinstalls itself and can't observe its own restart), resolves the terminal by
 // polling GET /healthz until the agent's reported version changes.
-func streamDeploy(ctx context.Context, cl *agent.Client, filename, hash, sha string, body io.Reader, optIn bool, oldAgentVersion string, onEvent func(agent.DeployEvent)) (agent.DeployEvent, error) {
+func streamDeploy(ctx context.Context, cl *agent.Client, dev orgctx.Device, filename, hash, sha string, body io.Reader, optIn bool, oldAgentVersion string, onEvent func(agent.DeployEvent)) (agent.DeployEvent, error) {
 	_, terminal, err := cl.DeployStream(ctx, filename, hash, sha, body, optIn, onEvent)
 	if err != nil {
 		return agent.DeployEvent{}, err
@@ -447,20 +458,34 @@ func streamDeploy(ctx context.Context, cl *agent.Client, filename, hash, sha str
 		if onEvent != nil { // DeployStream documents onEvent may be nil
 			onEvent(agent.DeployEvent{State: agent.StateRestarting, Step: "agent restarting (self-deploy)"})
 		}
-		terminal = resolveSelfDeploy(ctx, cl, oldAgentVersion)
+		terminal = resolveSelfDeploy(ctx, cl, dev, oldAgentVersion)
 	}
 	return terminal, nil
 }
 
 // resolveSelfDeploy polls /healthz until the agent's version flips (the deployed
 // build came up) or the poll window elapses.
-func resolveSelfDeploy(ctx context.Context, cl *agent.Client, oldAgentVersion string) agent.DeployEvent {
-	deadline := time.Now().Add(selfDeployPollTimeout)
+func resolveSelfDeploy(ctx context.Context, cl *agent.Client, dev orgctx.Device, oldAgentVersion string) agent.DeployEvent {
+	ctx, cancel := context.WithTimeout(ctx, selfDeployPollTimeout)
+	defer cancel()
+	certificateMismatch := false
 	for {
-		if h, err := cl.Health(ctx); err == nil && h.AgentVersion != "" && h.AgentVersion != oldAgentVersion {
+		var h agent.Health
+		var err error
+		cl, h, err = healthWithPinRecovery(ctx, cl, dev)
+		if err == nil {
+			certificateMismatch = false
+		} else if errors.Is(err, agent.ErrFingerprintMismatch) {
+			certificateMismatch = true
+		}
+		if err == nil && h.AgentVersion != "" && h.AgentVersion != oldAgentVersion {
 			return agent.DeployEvent{State: agent.StateConfirmed, Step: "agent restarted", Version: h.AgentVersion, Terminal: true}
 		}
-		if ctx.Err() != nil || time.Now().After(deadline) {
+		if ctx.Err() != nil {
+			if certificateMismatch {
+				return agent.DeployEvent{State: agent.StateUnconfirmed, Step: "agent certificate could not be verified",
+					Hint: "the driver was written, but the agent's TLS certificate does not match its registered fingerprint — restart could not be confirmed", Terminal: true}
+			}
 			return agent.DeployEvent{State: agent.StateUnconfirmed, Step: "agent didn't report back in time",
 				Hint: "the agent is restarting — re-check shortly", Terminal: true}
 		}
@@ -514,28 +539,31 @@ func dialAgent(ctx context.Context, dev orgctx.Device) (*agent.Client, agent.Hea
 	if err != nil {
 		return nil, agent.Health{}, err
 	}
+	return healthWithPinRecovery(ctx, cl, dev)
+}
+
+// Only authenticated graph data can replace a pin. Keep the original client on
+// a failed refresh, and persist the replacement only after it verifies health.
+func healthWithPinRecovery(ctx context.Context, cl *agent.Client, dev orgctx.Device) (*agent.Client, agent.Health, error) {
 	h, herr := cl.Health(ctx)
 	if herr == nil || !errors.Is(herr, agent.ErrFingerprintMismatch) || dev.DeviceID == "" {
 		return cl, h, herr
 	}
-
-	// The pinned cert was rejected. Re-fetch the fingerprint from the graph; if
-	// it's genuinely newer, adopt it and retry once. If the graph has nothing
-	// new (same value, unreachable, or no cert on record), surface the original
-	// cert-changed error unchanged.
 	fp, ferr := driverforgeapi.New().DeviceFingerprint(ctx, dev.DeviceID)
-	if ferr != nil || fp == "" || fp == dev.TLSFingerprint {
+	if ferr != nil || fp == "" {
 		return cl, h, herr
 	}
-	dev.TLSFingerprint = fp
-	persistFingerprint(dev, fp)
-
-	cl, err = agentForDevice(ctx, dev)
-	if err != nil {
-		return nil, agent.Health{}, err
+	addr, ok := agentAddr(dev)
+	if !ok {
+		return cl, h, herr
 	}
-	h, herr = cl.Health(ctx)
-	return cl, h, herr
+	refreshed := agent.New("https://"+addr, fp)
+	h, err := refreshed.Health(ctx)
+	if err != nil {
+		return cl, h, herr
+	}
+	persistFingerprint(dev, fp)
+	return refreshed, h, nil
 }
 
 // connectedLabel is the ✓ line shown once the agent answers — filling the gap
