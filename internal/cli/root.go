@@ -119,7 +119,7 @@ func newRootCmd() *cobra.Command {
 	// Match the `version` subcommand's CLI line (cobra's default template says
 	// just "driverforge version dev", dropping the commit and build date).
 	root.SetVersionTemplate(buildinfo.String() + "\n")
-	root.AddCommand(newBuildCmd(), newInitCmd(), newPublishCmd(), newDeployCmd(), newSyncCmd(), newVersionCmd())
+	root.AddCommand(newBuildCmd(), newInitCmd(), newPublishCmd(), newDeployCmd(), newSyncCmd(), newDebugCmd(), newVersionCmd())
 	root.AddCommand(newLoginCmd(), newLogoutCmd(), newWhoamiCmd(), newOrgCmd(), newDeviceCmd())
 	root.AddCommand(newUpgradeCmd(), newDoctorCmd())
 	installUsageErrors(root) // make unknown command/flag/arg errors friendly

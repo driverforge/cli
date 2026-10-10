@@ -177,7 +177,7 @@ func TestAccessTokenForAudienceNoRefreshFallback(t *testing.T) {
 func TestLoginAudiencesUnion(t *testing.T) {
 	t.Setenv("DRIVERFORGE_AUTH_AUDIENCE", "")
 	t.Setenv("DRIVERFORGE_AGENT_AUDIENCE", "")
-	if got := loginAudiences(); got != "graph anvil-agent" {
+	if got := loginAudiences(); got != "graph anvil-agent mqtt-broker" {
 		t.Errorf("loginAudiences = %q, want \"graph anvil-agent\"", got)
 	}
 }

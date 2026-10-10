@@ -295,6 +295,42 @@ sequenceDiagram
   A-->>CLI: streamed progress → confirmed / failed / confirmed-with-errors
 ```
 
+### Live debug (`driverforge debug`, Remote4)
+
+```mermaid
+sequenceDiagram
+  participant Dev as Developer's Lua process
+  participant CLI as driverforge CLI
+  participant B as Anvil MQTT broker
+  participant S as Remote4 stub (on controller)
+  participant D as Director
+
+  CLI->>Dev: start runtime.lua, compile driver source
+  CLI->>CLI: build .c4z, swap script for the stub bundle (driver.xml untouched)
+  CLI->>B: connect (mqtt-broker JWT), subscribe remote4/{user}/{session}/+
+  CLI->>S: POST /deploy via the agent (as for deploy)
+  D->>S: OnDriverInit
+  S->>B: connect (same user's JWT, baked in; refreshed over `control`)
+  S-->>CLI: status online; queued callbacks flush
+  CLI->>Dev: load driver (file-scope C4 calls now reach the controller)
+  D->>S: ReceivedFromProxy(...)
+  S-->>CLI: callback (fire-and-forget; stub returns nil to Director)
+  CLI->>Dev: callback
+  Dev->>CLI: c4_call SendToProxy(...)
+  CLI->>S: c4_call
+  S->>D: C4:SendToProxy(...)
+  S-->>CLI: c4_response
+  CLI->>Dev: c4_response (the only side that blocks)
+```
+
+The stub, the runtime and the wire contract live in platform-control4
+(`remote4/`, `docs/remote4-protocol.md`) and are vendored into
+`internal/remote4/assets` by `scripts/vendor-remote4.sh`. `internal/remote4`
+holds the Go side: bundling, the broker client, the runtime process and the
+bridge between them. Callbacks are one-way because a driver cannot block on
+its own event loop; `C4` calls are synchronous from the local driver's point
+of view because only the laptop waits.
+
 ### Runtime telemetry
 
 ```mermaid

@@ -9,6 +9,7 @@ require (
 	charm.land/lipgloss/v2 v2.0.6
 	github.com/centrifugal/centrifuge-go v0.12.1
 	github.com/charmbracelet/colorprofile v0.4.3
+	github.com/eclipse/paho.mqtt.golang v1.5.1
 	github.com/getsentry/sentry-go v0.49.0
 	github.com/muesli/termenv v0.16.0
 	github.com/smallstep/pkcs7 v0.2.3
@@ -54,6 +55,7 @@ require (
 	github.com/shadowspore/fossil-delta v0.0.0-20241213113458-1d797d70cbe3 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
+	golang.org/x/net v0.44.0 // indirect
 	golang.org/x/sync v0.22.0 // indirect
 	golang.org/x/text v0.40.0 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect

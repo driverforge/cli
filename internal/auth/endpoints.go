@@ -33,6 +33,10 @@ var (
 	// Deliberately still the original "anvil-agent": renaming it means updating the
 	// deployed agents and Hydra together, deferred from the CLI rename.
 	AgentAudience = "anvil-agent"
+	// MQTTAudience is the Anvil broker audience. `driverforge debug` mints a
+	// broker-only token for its own connection and bakes one into the Remote4
+	// stub, so neither can be replayed against graph or the agent.
+	MQTTAudience = "mqtt-broker"
 	// GraphScope is the OAuth scope the Graph API requires on every request — it
 	// fails closed without it. Requested at login so the (union) access token
 	// used for graph calls carries it (Hydra `scope`, distinct from the `graph`
@@ -70,6 +74,13 @@ func resolveAgentAudience() string {
 	return AgentAudience
 }
 
+func resolveMQTTAudience() string {
+	if v := os.Getenv("DRIVERFORGE_MQTT_AUDIENCE"); v != "" {
+		return v
+	}
+	return MQTTAudience
+}
+
 func resolveGraphScope() string {
 	if v := os.Getenv("DRIVERFORGE_AUTH_GRAPH_SCOPE"); v != "" {
 		return v
@@ -99,8 +110,10 @@ func loginScopes() []string {
 // claims both graph and the agent; per-call tokens narrow from there.
 func loginAudiences() string {
 	auds := resolveAudience()
-	if a := resolveAgentAudience(); a != "" && a != resolveAudience() {
-		auds = strings.TrimSpace(auds + " " + a)
+	for _, a := range []string{resolveAgentAudience(), resolveMQTTAudience()} {
+		if a != "" && !strings.Contains(" "+auds+" ", " "+a+" ") {
+			auds = strings.TrimSpace(auds + " " + a)
+		}
 	}
 	return auds
 }

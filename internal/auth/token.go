@@ -31,6 +31,14 @@ func AgentAccessToken(ctx context.Context) (string, error) {
 	return AccessTokenForAudience(ctx, resolveAgentAudience())
 }
 
+// MQTTAccessToken returns an access token scoped to the Anvil broker audience
+// only. A session signed in before the broker audience was requested at login
+// cannot narrow to it; the grant then fails and the caller should ask for a
+// fresh `driverforge login`.
+func MQTTAccessToken(ctx context.Context) (string, error) {
+	return AccessTokenForAudience(ctx, resolveMQTTAudience())
+}
+
 // AccessTokenForAudience returns an access token narrowed to the given audience,
 // minted from the stored refresh token (Hydra downgrades audience on refresh).
 // If there is no refresh token to narrow from, it falls back to the stored
