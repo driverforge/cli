@@ -6,7 +6,7 @@
 -- docs/remote4-protocol.md "Value encoding".
 --
 -- Why not C4:JsonEncode? It serialises a sequence as an object with
--- stringified integer keys on real firmware (DF-453), and the runtime has no
+-- stringified integer keys on real firmware, and the runtime has no
 -- C4 at all.
 --
 -- Positional lists (call arguments, results) may contain nils. They are

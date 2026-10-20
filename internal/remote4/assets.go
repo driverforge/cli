@@ -1,13 +1,14 @@
 // Package remote4 implements the laptop side of the Remote4 live-debug proxy:
 // bundling and deploying the stub driver, the broker connection, the local
 // Lua runtime, and the bridge that relays messages between them. The wire
-// contract is platform-control4/docs/remote4-protocol.md.
+// contract is docs/remote4-protocol.md in the platform repo the assets are
+// vendored from.
 package remote4
 
 import "embed"
 
 // assets are the Lua programs and the broker CA, vendored byte-for-byte from
-// platform-control4 by scripts/vendor-remote4.sh so a released binary carries
+// the platform repo by scripts/vendor-remote4.sh so a released binary carries
 // exactly the stub it was tested with.
 //
 //go:embed assets/json.lua assets/stub.lua assets/runtime.lua assets/broker-ca.pem assets/callbacks.txt

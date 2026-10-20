@@ -323,7 +323,7 @@ sequenceDiagram
   CLI->>Dev: c4_response (the only side that blocks)
 ```
 
-The stub, the runtime and the wire contract live in platform-control4
+The stub, the runtime and the wire contract live in the platform repo
 (`remote4/`, `docs/remote4-protocol.md`) and are vendored into
 `internal/remote4/assets` by `scripts/vendor-remote4.sh`. `internal/remote4`
 holds the Go side: bundling, the broker client, the runtime process and the
