@@ -156,7 +156,7 @@ done
 		t.Fatal("End must be idempotent")
 	}
 	var controls []string
-	for _, p := range broker.Published {
+	for _, p := range broker.Published() {
 		if p.Topic == Topic("user-1", "sess-1", TopicControl) {
 			controls = append(controls, string(p.Payload))
 		}
@@ -185,13 +185,22 @@ func TestBridgeReportsRuntimeExit(t *testing.T) {
 	}
 }
 
+// lastPublished waits briefly for a publish on topic: the bridge emits its event
+// before it publishes, so the event can be seen first.
 func lastPublished(b *MemoryBroker, topic string) []byte {
-	for i := len(b.Published) - 1; i >= 0; i-- {
-		if b.Published[i].Topic == topic {
-			return b.Published[i].Payload
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		published := b.Published()
+		for i := len(published) - 1; i >= 0; i-- {
+			if published[i].Topic == topic {
+				return published[i].Payload
+			}
 		}
+		if time.Now().After(deadline) {
+			return nil
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
-	return nil
 }
 
 func TestTopicAndSummary(t *testing.T) {

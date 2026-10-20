@@ -210,7 +210,7 @@ func (b *pahoBroker) Close() {
 type MemoryBroker struct {
 	mu        sync.Mutex
 	subs      map[string][]func(string, []byte)
-	Published []PublishedMessage
+	published []PublishedMessage
 }
 
 // PublishedMessage is one recorded publish.
@@ -226,13 +226,21 @@ func NewMemoryBroker() *MemoryBroker {
 
 func (m *MemoryBroker) Publish(topic string, payload []byte) error {
 	m.mu.Lock()
-	m.Published = append(m.Published, PublishedMessage{Topic: topic, Payload: append([]byte(nil), payload...)})
+	m.published = append(m.published, PublishedMessage{Topic: topic, Payload: append([]byte(nil), payload...)})
 	handlers := append([]func(string, []byte){}, m.subs[topic]...)
 	m.mu.Unlock()
 	for _, h := range handlers {
 		h(topic, payload)
 	}
 	return nil
+}
+
+// Published returns a snapshot of everything published so far. Publishes come
+// from the bridge's goroutine, so reading the live slice would race.
+func (m *MemoryBroker) Published() []PublishedMessage {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]PublishedMessage(nil), m.published...)
 }
 
 func (m *MemoryBroker) Subscribe(topic string, handler func(string, []byte)) error {
