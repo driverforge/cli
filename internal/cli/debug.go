@@ -20,6 +20,8 @@ import (
 	"github.com/driverforge/cli/internal/buildinfo"
 	"github.com/driverforge/cli/internal/clierr"
 	"github.com/driverforge/cli/internal/driverforgeconfig"
+	"github.com/driverforge/cli/internal/orgctx"
+	"github.com/driverforge/cli/internal/project"
 	"github.com/driverforge/cli/internal/remote4"
 	"github.com/driverforge/cli/internal/sdkrelease"
 	"github.com/driverforge/cli/internal/ui"
@@ -27,7 +29,7 @@ import (
 
 // newDebugCmd starts a Remote4 live-debug session: the driver's Lua runs in
 // a local process while a stub on the controller forwards every callback to
-// it and executes its C4 calls. See platform-control4/docs/remote4-protocol.md.
+// it and executes its C4 calls. See docs/remote4-protocol.md in the platform repo.
 func newDebugCmd() *cobra.Command {
 	var o debugOptions
 	cmd := &cobra.Command{
@@ -71,57 +73,135 @@ const (
 	runtimeStopTimeout  = 3 * time.Second
 )
 
+// debugEnv is everything a session needs before it touches the controller.
+type debugEnv struct {
+	proj     project.Project
+	cfg      *driverforgeconfig.Config
+	userID   string
+	token    string
+	endpoint remote4.BrokerEndpoint
+	dev      orgctx.Device
+	session  string
+}
+
+func prepareDebug(ctx context.Context, out io.Writer, o debugOptions) (debugEnv, error) {
+	var env debugEnv
+	proj, err := requireProject(flagProjectDir)
+	if err != nil {
+		return env, err
+	}
+	cfg, err := requireInitialised(proj.Dir)
+	if err != nil {
+		return env, err
+	}
+	creds, err := auth.Load()
+	if err != nil {
+		return env, err
+	}
+	if creds.Subject == "" {
+		return env, clierr.User("not signed in", "run `driverforge login` first")
+	}
+	token, err := auth.MQTTAccessToken(ctx)
+	if err != nil {
+		return env, clierr.Wrap(err, "couldn't get a broker token for this session",
+			"your sign-in predates live debugging — run `driverforge login` again")
+	}
+	endpoint, err := remote4.ResolveBroker()
+	if err != nil {
+		return env, err
+	}
+	dev, err := resolveDeployDevice(ctx, out, o.device, o.selectDevice)
+	if err != nil {
+		return env, err
+	}
+	return debugEnv{proj: proj, cfg: cfg, userID: creds.Subject, token: token, endpoint: endpoint, dev: dev, session: newSessionID()}, nil
+}
+
+// buildStub builds the real driver as deploy would, unencrypted, then swaps its
+// script for the stub bundle. driver.xml is untouched. It returns the stub
+// package's path and the driver's artifact name.
+func buildStub(ctx context.Context, cmd *cobra.Command, out io.Writer, o debugOptions, env debugEnv, handlers []string) (stubPath, artifact string, err error) {
+	opts, err := deployBuildOptions(o.configuration)
+	if err != nil {
+		return "", "", err
+	}
+	noEncrypt := false
+	opts.Encrypt = &noEncrypt
+	res, err := executeBuild(cmd, opts, o.configuration)
+	if err != nil {
+		return "", "", err
+	}
+	sdk := loadSDKBundle(ctx, out, env.cfg)
+	stubCfg := remote4.StubConfig{
+		SessionID: env.session, UserID: env.userID, Token: env.token, Handlers: handlers,
+		BrokerHost: env.endpoint.Host, BrokerPort: env.endpoint.Port, BrokerTLS: env.endpoint.TLS,
+		SkipHostnameCheck: env.endpoint.TLS, CAPEM: string(remote4.BrokerCA()),
+		DriverToken: stubDriverToken(ctx, out, env.cfg, sdk != nil), StubVersion: strings.TrimPrefix(buildinfo.String(), "driverforge "),
+	}
+	stubPath = filepath.Join(env.proj.DistDir, res.ArtifactName+"-remote4.c4z")
+	if err := remote4.RewriteC4z(res.C4zPath, stubPath, remote4.Bundle(stubCfg, sdk)); err != nil {
+		return "", "", err
+	}
+	return stubPath, res.ArtifactName, nil
+}
+
+// stubDriverToken is the project token the stub's logs and events ride on. Only
+// looked up when the SDK is present to use it.
+func stubDriverToken(ctx context.Context, out io.Writer, cfg *driverforgeconfig.Config, haveSDK bool) string {
+	if !haveSDK {
+		return ""
+	}
+	t, err := lookupProjectToken(ctx, out, cfg)
+	if err != nil {
+		ui.Fprintln(out, ui.Warning("no driver token; the stub's logs and events won't reach the Anvil console"))
+		return ""
+	}
+	return t
+}
+
+func connectDebugBroker(ctx context.Context, out io.Writer, env debugEnv) (remote4.Broker, error) {
+	broker, err := remote4.Connect(ctx, remote4.BrokerOptions{
+		Endpoint: env.endpoint,
+		ClientID: env.userID + "|remote4-cli-" + env.session,
+		Token:    func() (string, error) { return auth.MQTTAccessToken(context.Background()) },
+		OnState: func(s remote4.ConnectionState, cause error) {
+			switch s {
+			case remote4.StateConnected:
+				ui.Fprintln(out, ui.Success("broker connection restored"))
+			case remote4.StateLost:
+				ui.Fprintln(out, ui.Warning("broker connection lost: "+errString(cause)+" — reconnecting"))
+			}
+		},
+	})
+	if err != nil {
+		return nil, clierr.Wrap(err, "couldn't connect to the Anvil broker at "+env.endpoint.URL,
+			"check your network, or set DRIVERFORGE_MQTT_URL for a local stack")
+	}
+	return broker, nil
+}
+
 func runDebug(cmd *cobra.Command, o debugOptions) error {
 	out := cmd.OutOrStdout()
 	ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	proj, err := requireProject(flagProjectDir)
+	env, err := prepareDebug(ctx, out, o)
 	if err != nil {
 		return err
 	}
-	cfg, err := requireInitialised(proj.Dir)
-	if err != nil {
-		return err
-	}
-
-	creds, err := auth.Load()
-	if err != nil {
-		return err
-	}
-	if creds.Subject == "" {
-		return clierr.User("not signed in", "run `driverforge login` first")
-	}
-	userID := creds.Subject
-
-	token, err := auth.MQTTAccessToken(ctx)
-	if err != nil {
-		return clierr.Wrap(err, "couldn't get a broker token for this session",
-			"your sign-in predates live debugging — run `driverforge login` again")
-	}
-	endpoint, err := remote4.ResolveBroker()
-	if err != nil {
-		return err
-	}
-
-	dev, err := resolveDeployDevice(ctx, out, o.device, o.selectDevice)
-	if err != nil {
-		return err
-	}
-	session := newSessionID()
-	ui.Fprintln(out, "\n"+ui.DeployHeading("Debugging "+cfg.Project.Name+" on", dev.Name))
-	ui.Fprintln(out, ui.Muted("  session "+session))
+	ui.Fprintln(out, "\n"+ui.DeployHeading("Debugging "+env.cfg.Project.Name+" on", env.dev.Name))
+	ui.Fprintln(out, ui.Muted("  session "+env.session))
 
 	// 1. The local runtime first: a driver that doesn't compile never touches
 	// the controller. It is not run yet — drivers call C4 at file scope, and
 	// only a live stub can answer — so the stub's handler list comes from a
 	// static scan of the source.
-	handlers, err := remote4.ScanHandlers(proj.SrcDir)
+	handlers, err := remote4.ScanHandlers(env.proj.SrcDir)
 	if err != nil {
 		return err
 	}
 	rt, err := remote4.StartRuntime(ctx, remote4.RuntimeOptions{
-		Lua: o.lua, SrcDir: proj.SrcDir, Entry: cfg.Entry, Configuration: o.configuration,
+		Lua: o.lua, SrcDir: env.proj.SrcDir, Entry: env.cfg.Entry, Configuration: o.configuration,
 		MobDebug: o.mobdebug, Stderr: out,
 	})
 	if err != nil {
@@ -135,77 +215,38 @@ func runDebug(cmd *cobra.Command, o debugOptions) error {
 	}
 	ui.Fprintln(out, ui.Success(fmt.Sprintf("Compiled %s locally (%d handlers found)", compiled.Entry, len(handlers))))
 
-	// 2. Build the real driver as deploy would, unencrypted, then swap its
-	// script for the stub bundle. driver.xml is untouched.
-	opts, err := deployBuildOptions(o.configuration)
+	// 2. The stub package.
+	stubPath, artifact, err := buildStub(ctx, cmd, out, o, env, handlers)
 	if err != nil {
-		return err
-	}
-	noEncrypt := false
-	opts.Encrypt = &noEncrypt
-	res, err := executeBuild(cmd, opts, o.configuration)
-	if err != nil {
-		return err
-	}
-	sdk := loadSDKBundle(ctx, out, cfg)
-	driverToken := ""
-	if sdk != nil {
-		if t, terr := lookupProjectToken(ctx, out, cfg); terr == nil {
-			driverToken = t
-		} else {
-			ui.Fprintln(out, ui.Warning("no driver token; the stub's logs and events won't reach the Anvil console"))
-		}
-	}
-	stubCfg := remote4.StubConfig{
-		SessionID: session, UserID: userID, Token: token, Handlers: handlers,
-		BrokerHost: endpoint.Host, BrokerPort: endpoint.Port, BrokerTLS: endpoint.TLS,
-		SkipHostnameCheck: endpoint.TLS, CAPEM: string(remote4.BrokerCA()),
-		DriverToken: driverToken, StubVersion: strings.TrimPrefix(buildinfo.String(), "driverforge "),
-	}
-	stubPath := filepath.Join(proj.DistDir, res.ArtifactName+"-remote4.c4z")
-	if err := remote4.RewriteC4z(res.C4zPath, stubPath, remote4.Bundle(stubCfg, sdk)); err != nil {
 		return err
 	}
 	defer os.Remove(stubPath)
 
 	// 3. Our end of the broker before the stub's, so no early callback is lost.
-	broker, err := remote4.Connect(ctx, remote4.BrokerOptions{
-		Endpoint: endpoint,
-		ClientID: userID + "|remote4-cli-" + session,
-		Token:    func() (string, error) { return auth.MQTTAccessToken(context.Background()) },
-		OnState: func(s remote4.ConnectionState, cause error) {
-			switch s {
-			case remote4.StateConnected:
-				ui.Fprintln(out, ui.Success("broker connection restored"))
-			case remote4.StateLost:
-				ui.Fprintln(out, ui.Warning("broker connection lost: "+errString(cause)+" — reconnecting"))
-			}
-		},
-	})
+	broker, err := connectDebugBroker(ctx, out, env)
 	if err != nil {
-		return clierr.Wrap(err, "couldn't connect to the Anvil broker at "+endpoint.URL,
-			"check your network, or set DRIVERFORGE_MQTT_URL for a local stack")
+		return err
 	}
 	defer broker.Close()
-	ui.Fprintln(out, ui.Success("Connected to broker "+endpoint.Host))
+	ui.Fprintln(out, ui.Success("Connected to broker "+env.endpoint.Host))
 
-	bridge := remote4.NewBridge(rt, broker, userID, session)
+	bridge := remote4.NewBridge(rt, broker, env.userID, env.session)
 	bridgeDone := make(chan error, 1)
 	go func() { bridgeDone <- bridge.Run(ctx) }()
 
 	// 4. Swap the stub in on the controller.
-	if err := runDeployToDevice(ctx, out, dev, stubPath, res.ArtifactName, false); err != nil {
+	if err := runDeployToDevice(ctx, out, env.dev, stubPath, artifact, false); err != nil {
 		return err
 	}
 
 	// 5. Reload on save, keep the stub's token fresh, render the session.
 	if !o.noReload {
-		go remote4.Watch(ctx, proj.SrcDir, 0, func(changed []string) {
+		go remote4.Watch(ctx, env.proj.SrcDir, 0, func(changed []string) {
 			ui.Fprintln(out, ui.Muted("  changed: "+strings.Join(changed, ", ")))
 			_ = bridge.Reload()
 		})
 	}
-	go refreshStubToken(ctx, bridge, token)
+	go refreshStubToken(ctx, bridge, env.token)
 
 	ui.Fprintln(out, "\n"+ui.Success("Debug session active. Ctrl+C to stop.")+"\n")
 	err = renderDebugEvents(ctx, out, bridge, bridgeDone, handlers)
@@ -297,23 +338,33 @@ func renderDebugEvents(ctx context.Context, out io.Writer, bridge *remote4.Bridg
 				continue
 			}
 			renderDebugEvent(out, e)
-			switch e.Kind {
-			case remote4.EventStubOnline:
-				// The driver runs only now: its file-scope C4 calls need the stub.
-				if !loadSent {
-					loadSent = true
-					if err := bridge.Load(); err != nil {
-						return clierr.Wrap(err, "couldn't start the driver locally", "")
-					}
-				}
-			case remote4.EventReady:
-				if missing := remote4.Missing(stubHandlers, e.Message.Handlers); len(missing) > 0 {
-					ui.Fprintln(out, ui.Warning("defined at runtime, not forwarded by the stub: "+strings.Join(missing, ", ")+
-						" — define them at file scope, then restart `driverforge debug`"))
-				}
+			if err := onDebugEvent(out, bridge, e, stubHandlers, &loadSent); err != nil {
+				return err
 			}
 		}
 	}
+}
+
+// onDebugEvent reacts to the events that drive the session, beyond rendering
+// them.
+func onDebugEvent(out io.Writer, bridge *remote4.Bridge, e remote4.Event, stubHandlers []string, loadSent *bool) error {
+	switch e.Kind {
+	case remote4.EventStubOnline:
+		// The driver runs only now: its file-scope C4 calls need the stub.
+		if *loadSent {
+			return nil
+		}
+		*loadSent = true
+		if err := bridge.Load(); err != nil {
+			return clierr.Wrap(err, "couldn't start the driver locally", "")
+		}
+	case remote4.EventReady:
+		if missing := remote4.Missing(stubHandlers, e.Message.Handlers); len(missing) > 0 {
+			ui.Fprintln(out, ui.Warning("defined at runtime, not forwarded by the stub: "+strings.Join(missing, ", ")+
+				" — define them at file scope, then restart `driverforge debug`"))
+		}
+	}
+	return nil
 }
 
 func renderDebugEvent(out io.Writer, e remote4.Event) {
