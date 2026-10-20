@@ -31,7 +31,7 @@ steps:
     timeout_in_minutes: 15
     plugins: &go
       - docker#v5.14.0:
-          image: golang:1.27.1
+          image: golang:1.27.2
           environment:
             # The agent's home is not the container's. Without these, Go has
             # nowhere writable to cache and fails before compiling anything.
@@ -83,7 +83,7 @@ steps:
     # not something this pipeline should depend on the parser supporting.
     plugins:
       - docker#v5.14.0:
-          image: golang:1.27.1
+          image: golang:1.27.2
           user: "1000:1000"
           environment:
             - HOME=/tmp
