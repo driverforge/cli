@@ -103,8 +103,15 @@ func prepareDebug(ctx context.Context, out io.Writer, o debugOptions) (debugEnv,
 	}
 	token, err := auth.MQTTAccessToken(ctx)
 	if err != nil {
-		return env, clierr.Wrap(err, "couldn't get a broker token for this session",
-			"your sign-in predates live debugging — run `driverforge login` again")
+		if errors.Is(err, auth.ErrSessionExpired) {
+			return env, clierr.WrapT(err, "Session expired", "your sign-in has expired, so the debug session can't start",
+				"run `driverforge login`, then `driverforge debug` again")
+		}
+		if ctx.Err() != nil {
+			return env, err
+		}
+		return env, clierr.WrapT(err, "Driverforge unreachable", "couldn't reach Driverforge to start the debug session",
+			"check your connection and try again")
 	}
 	endpoint, err := remote4.ResolveBroker()
 	if err != nil {

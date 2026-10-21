@@ -32,9 +32,9 @@ func AgentAccessToken(ctx context.Context) (string, error) {
 }
 
 // MQTTAccessToken returns an access token scoped to the Anvil broker audience
-// only. A session signed in before the broker audience was requested at login
-// cannot narrow to it; the grant then fails and the caller should ask for a
-// fresh `driverforge login`.
+// only. The grant fails with ErrSessionExpired when the refresh token has
+// expired or been revoked (the caller should ask for a fresh `driverforge
+// login`); any other failure — network, timeout, server error — is transient.
 func MQTTAccessToken(ctx context.Context) (string, error) {
 	return AccessTokenForAudience(ctx, resolveMQTTAudience())
 }
@@ -79,53 +79,9 @@ func AccessTokenForAudience(ctx context.Context, audience string) (string, error
 		return t, nil
 	}
 
-	form := url.Values{}
-	form.Set("grant_type", "refresh_token")
-	form.Set("refresh_token", c.RefreshToken)
-	form.Set("client_id", resolveClientID())
-	// Narrow to the OIDC base scopes only — the agent token must not carry the
-	// graph scope (defence in depth alongside the audience downgrade).
-	form.Set("scope", strings.Join(baseScopes(), " "))
-	if audience != "" {
-		form.Set("audience", audience)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, tokenURL(), strings.NewReader(form.Encode()))
+	tok, err := requestAudienceToken(ctx, c.RefreshToken, audience)
 	if err != nil {
 		return "", err
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-
-	resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if resp.StatusCode/100 != 2 {
-		// Same classification as session.refreshError: an expired/revoked grant
-		// is an anticipated condition, not a CLI bug.
-		var oe struct {
-			Error string `json:"error"`
-		}
-		_ = json.Unmarshal(body, &oe)
-		cause := fmt.Errorf("token downgrade for audience %q: HTTP %d %s", audience, resp.StatusCode, oe.Error)
-		if oe.Error == "invalid_grant" {
-			return "", sessionExpiredError(cause)
-		}
-		return "", signInUnavailableError(cause)
-	}
-
-	var tok struct {
-		AccessToken  string `json:"access_token"`
-		RefreshToken string `json:"refresh_token"`
-		ExpiresIn    int    `json:"expires_in"`
-	}
-	if err := json.Unmarshal(body, &tok); err != nil {
-		return "", signInUnavailableError(fmt.Errorf("token downgrade: %w", err))
-	}
-	if tok.AccessToken == "" {
-		return "", signInUnavailableError(fmt.Errorf("token downgrade for audience %q: empty access_token", audience))
 	}
 
 	// Persist the rotated refresh token (keep the union access token for graph)
@@ -148,6 +104,68 @@ func AccessTokenForAudience(ctx context.Context, audience string) (string, error
 
 	cacheAudienceToken(audience, tok.AccessToken, expiry)
 	return tok.AccessToken, nil
+}
+
+// audienceGrant is the token endpoint's response to an audience-narrowing
+// refresh.
+type audienceGrant struct {
+	AccessToken  string `json:"access_token"`
+	RefreshToken string `json:"refresh_token"`
+	ExpiresIn    int    `json:"expires_in"`
+}
+
+// requestAudienceToken performs the refresh-token grant narrowed to audience.
+// An invalid_grant is an expired or revoked session (ErrSessionExpired); every
+// other failure is the sign-in service being unavailable.
+func requestAudienceToken(ctx context.Context, refreshToken, audience string) (audienceGrant, error) {
+	form := url.Values{}
+	form.Set("grant_type", "refresh_token")
+	form.Set("refresh_token", refreshToken)
+	form.Set("client_id", resolveClientID())
+	// Narrow to the OIDC base scopes only — the agent token must not carry the
+	// graph scope (defence in depth alongside the audience downgrade).
+	form.Set("scope", strings.Join(baseScopes(), " "))
+	if audience != "" {
+		form.Set("audience", audience)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, tokenURL(), strings.NewReader(form.Encode()))
+	if err != nil {
+		return audienceGrant{}, err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
+	if err != nil {
+		if ctx.Err() != nil {
+			return audienceGrant{}, err
+		}
+		return audienceGrant{}, signInUnavailableError(fmt.Errorf("token downgrade: %w", err))
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode/100 != 2 {
+		// Same classification as session.refreshError: an expired/revoked grant
+		// is an anticipated condition, not a CLI bug.
+		var oe struct {
+			Error string `json:"error"`
+		}
+		_ = json.Unmarshal(body, &oe)
+		cause := fmt.Errorf("token downgrade for audience %q: HTTP %d %s", audience, resp.StatusCode, oe.Error)
+		if oe.Error == "invalid_grant" {
+			return audienceGrant{}, sessionExpiredError(cause)
+		}
+		return audienceGrant{}, signInUnavailableError(cause)
+	}
+
+	var tok audienceGrant
+	if err := json.Unmarshal(body, &tok); err != nil {
+		return audienceGrant{}, signInUnavailableError(fmt.Errorf("token downgrade: %w", err))
+	}
+	if tok.AccessToken == "" {
+		return audienceGrant{}, signInUnavailableError(fmt.Errorf("token downgrade for audience %q: empty access_token", audience))
+	}
+	return tok, nil
 }
 
 // persistedAudienceToken returns a cross-process-persisted audience token from c

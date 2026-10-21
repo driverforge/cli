@@ -355,3 +355,30 @@ func TestAgentAccessTokenUsesAgentAudience(t *testing.T) {
 		t.Error("AgentAccessToken must narrow to an audience, not request the union")
 	}
 }
+
+// Only a dead grant is ErrSessionExpired; a transport failure is the transient
+// "sign-in unavailable" condition, never a prompt to sign in again.
+func TestAccessTokenForAudienceExpiredVersusUnreachable(t *testing.T) {
+	isolate(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		io.WriteString(w, `{"error":"invalid_grant"}`)
+	}))
+	t.Setenv("DRIVERFORGE_AUTH_URL", srv.URL)
+	if err := Save(Credentials{AccessToken: "union-tok", RefreshToken: "rt0", Expiry: time.Now().Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := AccessTokenForAudience(context.Background(), "mqtt-broker"); !errors.Is(err, ErrSessionExpired) {
+		t.Fatalf("invalid_grant: error = %v, want ErrSessionExpired", err)
+	}
+
+	srv.Close() // connection refused from here on
+	_, err := AccessTokenForAudience(context.Background(), "mqtt-broker")
+	var ue *clierr.UserError
+	if !errors.As(err, &ue) || errors.Is(err, ErrSessionExpired) {
+		t.Fatalf("transport failure: error = %v, want a non-expired UserError", err)
+	}
+	if ue.Title != "Sign-in service unavailable" {
+		t.Errorf("title = %q, want Sign-in service unavailable", ue.Title)
+	}
+}

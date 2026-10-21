@@ -111,9 +111,16 @@ func refreshError(err error) error {
 	return signInUnavailableError(err)
 }
 
+// ErrSessionExpired marks a refresh that failed because the stored grant is
+// dead (expired or revoked), as opposed to the sign-in service being unreachable
+// or erroring. Match it with errors.Is to choose between "sign in again" and
+// "try again".
+var ErrSessionExpired = errors.New("session expired")
+
 // sessionExpiredError is the friendly condition for a dead grant (invalid_grant):
 // the session is gone and the user must sign in again.
 func sessionExpiredError(cause error) *clierr.UserError {
+	cause = fmt.Errorf("%w: %w", ErrSessionExpired, cause)
 	return &clierr.UserError{
 		Title:   "Session expired",
 		Message: "your sign-in has expired or been revoked",
