@@ -24,18 +24,17 @@ permissions:
   contents: write # create the GitHub Release
 
 env:
-  AZURE_STORAGE_CONTAINER: driverforge-releases
+  # releases.driverforge.com is CloudFront in front of this bucket; every path
+  # keeps the `driverforge-releases/` segment the URLs have always had.
+  RELEASES_BUCKET: driverforge-prod-releases
+  RELEASES_PREFIX: driverforge-releases
   ARTIFACT_PATH: driverforge-cli
-  # The signing key lives in Azure Key Vault. Its private half is
-  # non-exportable, so signing happens via the Key Vault API
-  # and no key material ever reaches the runner.
-  #
-  # The vault name is a repo variable rather than a literal: this file is
-  # published to the public mirror, and the name identifies infrastructure that
-  # appears nowhere else publicly. It is not a credential — access is governed
-  # by the federated identity below — but there is no reason to name a target.
-  AZURE_KEY_VAULT: ${{ vars.AZURE_KEY_VAULT }}
-  RELEASE_SIGNING_KEY: release-signing-v1
+  # The signing key lives in AWS KMS. Its private half was generated offline
+  # and imported, and KMS will not export it again, so signing happens via the
+  # KMS API and no key material ever reaches the runner. The id is what the
+  # CLI's trustedKeys and install.sh select the public key by.
+  RELEASE_SIGNING_KEY: release-signing-v2
+  RELEASE_SIGNING_KEY_ALIAS: alias/driverforge-release-signing-v2
 
 jobs:
   # Publishing belongs to the PUBLIC mirror. This repo carries the org's
@@ -93,32 +92,32 @@ jobs:
   release:
     # Releases are cut from the PUBLIC repo only. .goreleaser.yaml targets
     # `release.github: driverforge/cli`, so a run started here after the rename
-    # would publish a GitHub Release onto the mirror. The Azure signing preflight
-    # would fail first — this repo's name no longer matches the federated
-    # credential's subject — but relying on a late failure to protect the mirror
-    # is not a boundary. This is.
+    # would publish a GitHub Release onto the mirror. Assuming the release role
+    # would fail first — the role trusts only the public repo's subject — but
+    # relying on a late failure to protect the mirror is not a boundary. This is.
     needs: guard
     if: needs.guard.outputs.allowed == 'true' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
-    # The federated credential's subject must be, exactly:
+    # The release role (driverforge monorepo, infra/platform
+    # release-publishers.ts) trusts exactly this OIDC subject:
     #
-    #   repo:driverforge@182759942/cli@1211161755:environment:release
+    #   repo:driverforge@182759942/cli@1335631210:environment:release
     #
-    # Not repo:driverforge/cli:… — this repo was renamed, and GitHub
-    # then issues an ID-suffixed subject so a reclaimed old name cannot inherit
-    # the federation. The IDs read as noise but are the durable half: org and
-    # repo IDs survive renames, the names do not. Confirm against a real run's
-    # "subject claim" log line rather than the documented format if this ever
-    # needs re-registering; v0.5.0 failed on exactly that assumption.
+    # Not repo:driverforge/cli:… — this repo uses GitHub's immutable subject,
+    # with org and repo IDs, so a reclaimed name cannot inherit the trust. The
+    # IDs read as noise but are the durable half: they survive renames, the
+    # names do not. Read the prefix from
+    # `gh api repos/<repo>/actions/oidc/customization/sub` rather than
+    # constructing it; v0.5.0 failed on exactly that assumption.
     #
-    # Azure AD needs an exact subject and refs/tags/* is not expressible, hence
-    # scoping to an environment. This workflow is tag-triggered, so prefer a
+    # The trust names an environment rather than a ref so the environment's
+    # protection rules gate signing too. This workflow is tag-triggered, so prefer a
     # deployment-tag rule (v*) over required reviewers, which would stall every
     # release on a human.
     environment: release
     permissions:
       contents: write
-      # OIDC token for azure/login, and for signing the provenance attestation.
+      # OIDC token for the release role, and for signing the provenance attestation.
       id-token: write
       # Record the build provenance in GitHub's attestation store.
       attestations: write
@@ -153,29 +152,30 @@ jobs:
       # federation failure landed with binaries, a GitHub release and both taps
       # already at the new version while the release manifest still described the
       # old one. A release that cannot finish should not have started.
-      - name: Authenticate to Azure for signing
-        uses: azure/login@v3
+      # The role may write under driverforge-releases/driverforge-cli/, never
+      # delete, and sign with the release key as RS256. Its ARN is a repo
+      # variable: `pulumi stack output releasePublisherRoles` → .cli
+      - name: Assume the release role
+        uses: aws-actions/configure-aws-credentials@v6
         with:
-          client-id: ${{ vars.AZURE_RELEASE_SIGNER_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
-          # The identity holds one role: Key Vault Crypto User scoped to the
-          # signing key alone. It has no subscription-level reader, so asking
-          # for a subscription context would fail the login.
-          allow-no-subscriptions: true
+          role-to-assume: ${{ vars.AWS_RELEASE_ROLE_ARN }}
+          aws-region: us-west-2
 
-      # Logging in proves the federated identity resolves; it does not prove this
-      # identity may actually sign with the key. Those fail at different layers
-      # (Entra federation vs the Key Vault role assignment), so exercise the real
-      # operation on a throwaway digest while failing is still free.
+      # Assuming the role proves the OIDC trust resolves; it does not prove the
+      # role may sign, or that the key has had its material imported (a key in
+      # PendingImport refuses to sign). Those fail at different layers, so
+      # exercise the real operation on a throwaway digest while failing is
+      # still free.
       - name: Verify the signing key is usable
         run: |
           set -euo pipefail
-          az keyvault key sign \
-            --vault-name "$AZURE_KEY_VAULT" \
-            --name "$RELEASE_SIGNING_KEY" \
-            --algorithm RS256 \
-            --digest "$(printf 'release-preflight' | openssl dgst -sha256 -binary | base64)" \
-            --query signature -o tsv > /dev/null
+          printf 'release-preflight' | openssl dgst -sha256 -binary > preflight.digest
+          aws kms sign \
+            --key-id "$RELEASE_SIGNING_KEY_ALIAS" \
+            --message fileb://preflight.digest --message-type DIGEST \
+            --signing-algorithm RSASSA_PKCS1_V1_5_SHA_256 \
+            --query Signature --output text > /dev/null
+          rm preflight.digest
           echo "signing key $RELEASE_SIGNING_KEY is usable"
 
       # syft generates the per-archive SBOMs (see `sboms:` in .goreleaser.yaml).
@@ -197,10 +197,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Pushes the cask/manifest to homebrew-tap and scoop-bucket (see above).
           TAP_GITHUB_TOKEN: ${{ steps.tap-token.outputs.token }}
-          # Canonical artifact upload to Azure (the `blobs` stage). Account name is a
-          # non-sensitive repo variable; only the key is a secret.
-          AZURE_STORAGE_ACCOUNT: ${{ vars.AZURE_STORAGE_ACCOUNT }}
-          AZURE_STORAGE_KEY: ${{ secrets.AZURE_STORAGE_KEY }}
           # Sentry error-reporting DSN, injected into release binaries via ldflags
           # (source defaults empty so forks/local builds never report to our
           # Sentry). A repo VARIABLE, not a secret — a DSN is a public client key.
@@ -220,7 +216,7 @@ jobs:
           # MACOS_NOTARY_KEY: ${{ secrets.MACOS_NOTARY_KEY }}
 
       # Build provenance: a signed SLSA statement binding each archive's digest to
-      # this repository, commit and workflow run. The Key Vault signature further
+      # this repository, commit and workflow run. The KMS signature further
       # down proves *we* published an artifact; this proves *where it came from* —
       # which is the claim that matters if the source is ever open, and the one
       # that lets someone shipping a Driverforge-built driver show their own
@@ -241,7 +237,7 @@ jobs:
           cp "${{ steps.attest.outputs.bundle-path }}" dist/provenance.sigstore.jsonl
           echo "bundle: $(wc -c < dist/provenance.sigstore.jsonl) bytes"
 
-      # GoReleaser uploaded the versioned archives + checksums to Azure. This step
+      # GoReleaser uploaded the versioned archives + checksums to S3. This step
       # publishes the release manifest the CLI's update notifier reads — to both the
       # immutable versioned path and the mutable `latest/` pointer — mirroring the SDK
       # and agent release pipelines (same schema: version/tag/commit/releasedAt/artifacts).
@@ -253,7 +249,7 @@ jobs:
           set -euo pipefail
           TAG="${GITHUB_REF_NAME}"
           VERSION="${TAG#v}"
-          BASE_URL="https://releases.driverforge.com/$AZURE_STORAGE_CONTAINER/$ARTIFACT_PATH/$TAG"
+          BASE_URL="https://releases.driverforge.com/$RELEASES_PREFIX/$ARTIFACT_PATH/$TAG"
 
           # Build the artifacts[] array from what GoReleaser produced: the archives,
           # their SBOMs, and the provenance bundle.
@@ -290,49 +286,37 @@ jobs:
           set -euo pipefail
           # Sign the file exactly as written. Re-serialising the JSON here would
           # reorder keys and produce a signature the CLI rejects.
-          DIGEST="$(openssl dgst -sha256 -binary manifest.json | base64)"
-          SIG="$(az keyvault key sign \
-            --vault-name "$AZURE_KEY_VAULT" \
-            --name "$RELEASE_SIGNING_KEY" \
-            --algorithm RS256 \
-            --digest "$DIGEST" \
-            --query signature -o tsv)"
+          openssl dgst -sha256 -binary manifest.json > manifest.digest
+          SIG="$(aws kms sign \
+            --key-id "$RELEASE_SIGNING_KEY_ALIAS" \
+            --message fileb://manifest.digest --message-type DIGEST \
+            --signing-algorithm RSASSA_PKCS1_V1_5_SHA_256 \
+            --query Signature --output text)"
+          rm manifest.digest
           jq -n \
             --arg keyId "$RELEASE_SIGNING_KEY" \
             --arg sig "$SIG" \
             '{alg: "RS256", keyId: $keyId, sig: $sig}' \
             > manifest.json.sig
 
-      - name: Publish release manifest to Azure
-        uses: azure/cli@v3
-        env:
-          AZURE_STORAGE_ACCOUNT: ${{ vars.AZURE_STORAGE_ACCOUNT }}
-          AZURE_STORAGE_KEY: ${{ secrets.AZURE_STORAGE_KEY }}
-        with:
-          inlineScript: |
-            set -euo pipefail
-            TAG="${GITHUB_REF_NAME}"
+      - name: Publish release manifest
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          DEST="s3://$RELEASES_BUCKET/$RELEASES_PREFIX/$ARTIFACT_PATH"
+          IMMUTABLE="public, max-age=31536000, immutable"
+          LATEST="no-cache, must-revalidate"
 
-            # The provenance bundle rides with the artifacts it describes, so it
-            # can be verified without reaching GitHub — which matters while this
-            # repository is private, and stays useful afterwards.
-            az storage blob upload -c "$AZURE_STORAGE_CONTAINER" \
-              -n "$ARTIFACT_PATH/$TAG/provenance.sigstore.jsonl" -f dist/provenance.sigstore.jsonl \
-              --content-type "application/jsonl" \
-              --content-cache-control "public, max-age=31536000, immutable" --overwrite
+          # The provenance bundle rides with the artifacts it describes, so it
+          # can be verified without reaching GitHub — which matters while this
+          # repository is private, and stays useful afterwards.
+          aws s3 cp dist/provenance.sigstore.jsonl "$DEST/$TAG/provenance.sigstore.jsonl" \
+            --content-type "application/jsonl" --cache-control "$IMMUTABLE"
 
-            az storage blob upload -c "$AZURE_STORAGE_CONTAINER" \
-              -n "$ARTIFACT_PATH/$TAG/manifest.json" -f manifest.json \
-              --content-cache-control "public, max-age=31536000, immutable" --overwrite
-            az storage blob upload -c "$AZURE_STORAGE_CONTAINER" \
-              -n "$ARTIFACT_PATH/$TAG/manifest.json.sig" -f manifest.json.sig \
-              --content-cache-control "public, max-age=31536000, immutable" --overwrite
-            az storage blob upload -c "$AZURE_STORAGE_CONTAINER" \
-              -n "$ARTIFACT_PATH/latest/manifest.json" -f manifest.json \
-              --content-cache-control "no-cache, must-revalidate" --overwrite
-            az storage blob upload -c "$AZURE_STORAGE_CONTAINER" \
-              -n "$ARTIFACT_PATH/latest/manifest.json.sig" -f manifest.json.sig \
-              --content-cache-control "no-cache, must-revalidate" --overwrite
+          aws s3 cp manifest.json "$DEST/$TAG/manifest.json" --cache-control "$IMMUTABLE"
+          aws s3 cp manifest.json.sig "$DEST/$TAG/manifest.json.sig" --cache-control "$IMMUTABLE"
+          aws s3 cp manifest.json "$DEST/latest/manifest.json" --cache-control "$LATEST"
+          aws s3 cp manifest.json.sig "$DEST/latest/manifest.json.sig" --cache-control "$LATEST"
 
       # The install script is the one artifact whose URL a user types from memory
       # (or from a doc written a year ago), so it is the one that can never move.
@@ -349,37 +333,32 @@ jobs:
       # text/plain so following the link in a browser renders the source instead of
       # downloading it — anyone about to pipe this into a shell should be able to
       # read it first.
-      - name: Publish the install script to Azure
-        uses: azure/cli@v3
-        env:
-          AZURE_STORAGE_ACCOUNT: ${{ vars.AZURE_STORAGE_ACCOUNT }}
-          AZURE_STORAGE_KEY: ${{ secrets.AZURE_STORAGE_KEY }}
-        with:
-          inlineScript: |
-            set -euo pipefail
-            TAG="${GITHUB_REF_NAME}"
+      - name: Publish the install script
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          DEST="s3://$RELEASES_BUCKET/$RELEASES_PREFIX/$ARTIFACT_PATH"
 
-            az storage blob upload -c "$AZURE_STORAGE_CONTAINER" \
-              -n "$ARTIFACT_PATH/$TAG/install.sh" -f scripts/install.sh \
-              --content-type "text/plain; charset=utf-8" \
-              --content-cache-control "public, max-age=31536000, immutable" --overwrite
-            az storage blob upload -c "$AZURE_STORAGE_CONTAINER" \
-              -n "$ARTIFACT_PATH/install.sh" -f scripts/install.sh \
-              --content-type "text/plain; charset=utf-8" \
-              --content-cache-control "no-cache, must-revalidate" --overwrite
+          aws s3 cp scripts/install.sh "$DEST/$TAG/install.sh" \
+            --content-type "text/plain; charset=utf-8" \
+            --cache-control "public, max-age=31536000, immutable"
+          aws s3 cp scripts/install.sh "$DEST/install.sh" \
+            --content-type "text/plain; charset=utf-8" \
+            --cache-control "no-cache, must-revalidate"
 
       # A broken installer is only ever discovered by the person it breaks, so prove
       # the published copy end to end rather than trusting the upload's exit code:
       # fetch the public URL back and byte-compare it with what we shipped. This
-      # catches a wrong path, a stale cached copy, and an Azure error document
-      # served with a 200.
+      # catches a wrong path, a stale cached copy, and an error document served
+      # with a 200.
       - name: Verify the published install script
         run: |
           set -euo pipefail
-          URL="https://releases.driverforge.com/$AZURE_STORAGE_CONTAINER/$ARTIFACT_PATH/install.sh"
+          URL="https://releases.driverforge.com/$RELEASES_PREFIX/$ARTIFACT_PATH/install.sh"
 
-          # Blob storage is read-after-write consistent, but retry briefly rather
-          # than fail a whole release on a transient edge.
+          # S3 is read-after-write consistent, and a no-cache object stays at the
+          # CloudFront edge for a second at most, but retry briefly rather than
+          # fail a whole release on a transient edge.
           for attempt in 1 2 3; do
             if curl -sSLf "$URL" -o published-install.sh; then break; fi
             echo "attempt $attempt: $URL not readable yet"
@@ -403,7 +382,7 @@ jobs:
           set -euo pipefail
           TAG="${GITHUB_REF_NAME}"
           VERSION="${TAG#v}"
-          BASE="https://releases.driverforge.com/$AZURE_STORAGE_CONTAINER/$ARTIFACT_PATH"
+          BASE="https://releases.driverforge.com/$RELEASES_PREFIX/$ARTIFACT_PATH"
 
           # Both the immutable copy and the pointer must describe THIS release.
           # `latest` lagging is the silent failure: taps and the GitHub release
@@ -453,7 +432,7 @@ jobs:
           set -euo pipefail
           TAG="${GITHUB_REF_NAME}"
           VERSION="${TAG#v}"
-          BASE="https://releases.driverforge.com/$AZURE_STORAGE_CONTAINER/$ARTIFACT_PATH/$TAG"
+          BASE="https://releases.driverforge.com/$RELEASES_PREFIX/$ARTIFACT_PATH/$TAG"
           ASSET="driverforge_${VERSION}_linux_amd64.tar.gz"
 
           work="$(mktemp -d)"

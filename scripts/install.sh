@@ -11,14 +11,14 @@
 # terminal so the prompts below have somewhere to read from. `-f` matters too —
 # without it curl hands an HTTP error page to the shell to execute.
 #
-# Downloads the release archive from Azure (releases.driverforge.com — the canonical
+# Downloads the release archive from releases.driverforge.com (the canonical
 # source), verifies it against a signed release manifest, and installs `driverforge`.
 #
 # Trust chain, the same one the CLI itself applies to the SDK and agent
 # (internal/releaseverify): the public key below is embedded in this script, it
 # verifies the detached RS256 signature over the release manifest, and the verified
 # manifest carries the SHA-256 of every artifact. So the archive is chained back to
-# a key whose private half has never left Azure Key Vault. Fetching the checksum
+# a key whose private half signs only inside a KMS. Fetching the checksum
 # from the same host as the archive — which this script used to do — proves only
 # that the two agree, which an attacker who can write one can arrange for both.
 #

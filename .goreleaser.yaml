@@ -1,8 +1,8 @@
 # GoReleaser config — https://goreleaser.com
 # On every `vX.Y.Z` tag this builds cross-platform binaries and publishes them to
-# Azure Blob Storage (releases.driverforge.com) — the canonical, customer-facing
+# releases.driverforge.com (S3 behind CloudFront) — the canonical, customer-facing
 # source — then updates the Homebrew tap and Scoop bucket (whose download URLs point
-# at Azure, NOT GitHub, since customers can't reach the private repo). A GitHub
+# at releases.driverforge.com, NOT GitHub, since customers can't reach the private repo). A GitHub
 # Release is still cut as an internal mirror / in case the CLI is open-sourced later.
 # Validate with `goreleaser check`.
 version: 2
@@ -86,14 +86,15 @@ sboms:
   - id: archives
     artifacts: archive
 
-# Canonical distribution: upload archives + checksums to the Azure container
-# `driverforge-releases` under `driverforge-cli/<tag>/`. Served publicly at
+# Canonical distribution: upload archives + checksums to the releases bucket under
+# `driverforge-releases/driverforge-cli/<tag>/`. Served publicly at
 # https://releases.driverforge.com/driverforge-releases/driverforge-cli/<tag>/<file>.
-# Auth via AZURE_STORAGE_ACCOUNT / AZURE_STORAGE_KEY (set in release.yml).
+# Auth is the AWS role release.yml assumes before GoReleaser runs.
 blobs:
-  - provider: azblob
-    bucket: driverforge-releases
-    directory: "driverforge-cli/{{ .Tag }}"
+  - provider: s3
+    region: us-west-2
+    bucket: driverforge-prod-releases
+    directory: "driverforge-releases/driverforge-cli/{{ .Tag }}"
     cache_control:
       - public
       - max-age=31536000
@@ -144,8 +145,8 @@ homebrew_casks:
     directory: Casks
     homepage: "https://go.driverforge.com/app"
     description: "Driverforge CLI — build and manage Control4 drivers"
-    # Download from Azure, not GitHub — the tap repo is public metadata, the binary
-    # comes from releases.driverforge.com.
+    # Download from releases.driverforge.com, not GitHub — the tap repo is public
+    # metadata, the binary comes from the releases bucket.
     url:
       template: "https://releases.driverforge.com/driverforge-releases/driverforge-cli/{{ .Tag }}/{{ .ArtifactName }}"
       verified: "releases.driverforge.com/driverforge-releases/driverforge-cli/"
@@ -172,7 +173,7 @@ scoops:
       owner: driverforge
       name: scoop-bucket
       token: "{{ .Env.TAP_GITHUB_TOKEN }}"
-    # Download from Azure, not GitHub (see the cask note above).
+    # Download from releases.driverforge.com, not GitHub (see the cask note above).
     url_template: "https://releases.driverforge.com/driverforge-releases/driverforge-cli/{{ .Tag }}/{{ .ArtifactName }}"
     homepage: "https://go.driverforge.com/app"
     description: "Driverforge CLI — build and manage Control4 drivers"

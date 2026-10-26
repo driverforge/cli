@@ -3,8 +3,8 @@ name: Release preflight
 # Prove this repository can cut a release, without cutting one.
 #
 # Runs exactly the credential checks release.yml performs before it publishes
-# anything — resolve the bot App token, federate to Azure, sign a throwaway
-# digest with the release key — and then stops. Nothing is built, uploaded,
+# anything — resolve the bot App token, assume the AWS release role, sign a
+# throwaway digest with the release key — and then stops. Nothing is built, uploaded,
 # tagged, or pushed to a tap.
 #
 # Two reasons this exists as its own workflow rather than a flag on release.yml:
@@ -13,12 +13,12 @@ name: Release preflight
 #     credential path exercised BEFORE a tag exists, and a dry run that reached
 #     GoReleaser would push a test version to the PUBLIC Homebrew tap and Scoop
 #     bucket, where real users' `brew upgrade` would find it.
-#   - Credentials rot silently. v0.5.0 failed because a federated credential's
-#     subject no longer matched after a repo rename, and the failure surfaced
+#   - Credentials rot silently. v0.5.0 failed because an OIDC trust's subject
+#     no longer matched after a repo rename, and the failure surfaced
 #     only once binaries and both taps were already published. This answers
 #     "could we release right now?" at any time, for free.
 #
-# The environment below is load-bearing: the federated credential's subject ends
+# The environment below is load-bearing: the release role trusts a subject ending
 # in `:environment:release`, so a run without it presents a different subject and
 # fails auth for a reason that looks like a broken federation but is not.
 
@@ -26,7 +26,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  # OIDC token for azure/login. Nothing else — this workflow writes nothing.
+  # OIDC token for the release role. Nothing else — this workflow writes nothing.
   id-token: write
   contents: read
 
@@ -91,12 +91,8 @@ jobs:
       - name: Report credential resolution
         env:
           BOT_KEY: ${{ secrets.DRIVERFORGE_BOT_PRIVATE_KEY }}
-          STORAGE_KEY: ${{ secrets.AZURE_STORAGE_KEY }}
           BOT_CLIENT_ID: ${{ vars.DRIVERFORGE_BOT_CLIENT_ID }}
-          SIGNER_CLIENT_ID: ${{ vars.AZURE_RELEASE_SIGNER_CLIENT_ID }}
-          TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
-          KEY_VAULT: ${{ vars.AZURE_KEY_VAULT }}
-          STORAGE_ACCOUNT: ${{ vars.AZURE_STORAGE_ACCOUNT }}
+          RELEASE_ROLE: ${{ vars.AWS_RELEASE_ROLE_ARN }}
           SENTRY_DSN: ${{ vars.DRIVERFORGE_SENTRY_DSN }}
           MIXPANEL_TOKEN: ${{ vars.DRIVERFORGE_MIXPANEL_TOKEN }}
         run: |
@@ -112,13 +108,9 @@ jobs:
           }
           echo "secrets:"
           check "DRIVERFORGE_BOT_PRIVATE_KEY" "$BOT_KEY"
-          check "AZURE_STORAGE_KEY"           "$STORAGE_KEY"
           echo "variables:"
           check "DRIVERFORGE_BOT_CLIENT_ID"    "$BOT_CLIENT_ID"
-          check "AZURE_RELEASE_SIGNER_CLIENT_ID" "$SIGNER_CLIENT_ID"
-          check "AZURE_TENANT_ID"              "$TENANT_ID"
-          check "AZURE_KEY_VAULT"              "$KEY_VAULT"
-          check "AZURE_STORAGE_ACCOUNT"        "$STORAGE_ACCOUNT"
+          check "AWS_RELEASE_ROLE_ARN"         "$RELEASE_ROLE"
           check "DRIVERFORGE_SENTRY_DSN"       "$SENTRY_DSN"
           check "DRIVERFORGE_MIXPANEL_TOKEN"   "$MIXPANEL_TOKEN"
           if [ "$missing" -ne 0 ]; then
@@ -139,32 +131,31 @@ jobs:
             homebrew-tap
             scoop-bucket
 
-      # The subject GitHub presents is logged by this action. When registering a
-      # federated credential for a NEW repository, read the subject from a failed
-      # run here rather than constructing it — it carries org and repo IDs that
-      # survive renames, and guessing it is what broke v0.5.0.
-      - name: Authenticate to Azure for signing
-        uses: azure/login@v3
+      # When the role is refused, read the subject GitHub presented from
+      # `gh api repos/<repo>/actions/oidc/customization/sub` rather than
+      # constructing it — it carries org and repo IDs that survive renames, and
+      # guessing it is what broke v0.5.0.
+      - name: Assume the release role
+        uses: aws-actions/configure-aws-credentials@v6
         with:
-          client-id: ${{ vars.AZURE_RELEASE_SIGNER_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
-          allow-no-subscriptions: true
+          role-to-assume: ${{ vars.AWS_RELEASE_ROLE_ARN }}
+          aws-region: us-west-2
 
-      # Logging in proves the federation resolves; it does not prove this
-      # identity may sign. Those fail at different layers (Entra federation vs
-      # the Key Vault role assignment), so exercise the real operation.
+      # Assuming the role proves the trust resolves; it does not prove the role
+      # may sign, or that the key's material has been imported (a key in
+      # PendingImport refuses to sign). Exercise the real operation.
       - name: Verify the signing key is usable
         env:
-          AZURE_KEY_VAULT: ${{ vars.AZURE_KEY_VAULT }}
-          RELEASE_SIGNING_KEY: release-signing-v1
+          RELEASE_SIGNING_KEY: release-signing-v2
+          RELEASE_SIGNING_KEY_ALIAS: alias/driverforge-release-signing-v2
         run: |
           set -euo pipefail
-          az keyvault key sign \
-            --vault-name "$AZURE_KEY_VAULT" \
-            --name "$RELEASE_SIGNING_KEY" \
-            --algorithm RS256 \
-            --digest "$(printf 'release-preflight' | openssl dgst -sha256 -binary | base64)" \
-            --query signature -o tsv > /dev/null
+          printf 'release-preflight' | openssl dgst -sha256 -binary > preflight.digest
+          aws kms sign \
+            --key-id "$RELEASE_SIGNING_KEY_ALIAS" \
+            --message fileb://preflight.digest --message-type DIGEST \
+            --signing-algorithm RSASSA_PKCS1_V1_5_SHA_256 \
+            --query Signature --output text > /dev/null
           echo "signing key $RELEASE_SIGNING_KEY is usable from ${GITHUB_REPOSITORY}"
 
       - name: Verdict
