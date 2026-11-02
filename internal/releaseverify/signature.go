@@ -27,15 +27,15 @@ const signingAlg = "RS256"
 // has no self-updater, so a single-key design would strand every installed
 // copy the moment a key was retired.
 //
-// The key is created in Azure Key Vault with
-// exportable: false — the private half is generated inside the vault and can
-// never be extracted, so there is no private key to embed, leak, or rotate out
-// of a CI secret store. An empty map fails closed; see VerifyManifest.
+// Releases are signed by the release pipeline through a cloud signing service,
+// which holds the private half; no build machine or CI secret store ever has
+// it, so there is no private key to embed, leak, or rotate out of one. An
+// empty map fails closed; see VerifyManifest.
 var trustedKeys = map[string]string{
-	// Public half of `release-signing-v1`. The
-	// private half is non-exportable and has never left the vault, so there is
+	// Public half of `release-signing-v1`, which signed releases up to v0.8.5.
+	// It signs nothing new; it stays so those releases still verify. There is
 	// nothing secret here — this is exactly the value we want reviewable in
-	// source, since it is the trust root for every release this build installs.
+	// source, since it is a trust root for the releases this build installs.
 	"release-signing-v1": `-----BEGIN PUBLIC KEY-----
 MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAtqHcm7GC4GjkU3Or50E8
 NY7IqTnIQdM6Rwubu1URuGD2gLUx3gPFb7JLvXM/X4hDe8PZvVPxmFb9spdHdL2h
@@ -44,6 +44,24 @@ f9ycCCXX8EsOwDdJ9ecaZb7TElqyIrWkM5dvbJSaldb+YXB7KjpPgwwCnsW8lF+G
 WRSsCcuFkEUs9ZQQxnP6QWRyHIByZ6qM8l/zDOCKZD70rCz0jKBr7oRVkjvxJ2nG
 ZTf7bSPrDK6uCdGH3EwRoEZJemHnAvjv1HwZRKdOTAElsU2AEKpzf5lnWXRMS+3V
 OQIDAQAB
+-----END PUBLIC KEY-----`,
+	// Public half of `release-signing-v2` (RSA-4096), which signs every
+	// release after CLI v0.8.5: the CLI's, the SDK's and the agent's.
+	// SHA-256 of its SPKI DER encoding:
+	// 7b286fbc3d225d1ff5d97d0ecb42f1ef81430c0d47f99ced10c79c4ab8af0939
+	"release-signing-v2": `-----BEGIN PUBLIC KEY-----
+MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEAyZE6JXIc9y04KJc4y9no
+Tst3j//GKRAkvEkrtB0rCq7Nj8bu94O+xQSizFxtYUW9PeI3TaiHLUBtcbaiBglF
+hG6Q2mfPZuvFWdwE1I1+Sun7bU+xz27IQkSNiuVSLYhdXojFyPj4o21U2RFGUv6j
+n6tyi/0aZvuzmKlwxb8ooNNQCLK8y4aagZmKbYGCVEtACFweuMnppDAzzet+nVgZ
+bqvRbGO5LF5UKtUum0N9tG1EKNVUtywAGzyUI9rv6WkPo5d9y3DMS/6RnP/eNojR
+DTCNFE6E8t7A/pmXvY+OMhiqhfb5/6S+0ILW0p2kzomIRU5whD9dsW5uUWGuw/sF
+gXobjPPVyUrNceUNZZLEFW1VZPzXy2inVP6gbSsWB/VgQISD/ZOB8yqjAAYvzeqn
+p/+iaRc+HXlC5Tscukn/NfYbnfitGSq0bmWPqofX1PwaXt/lHPgwiuH+PXqHIWVg
+Aj8471t0/gjO8NXXsPITFdJJ4DVgyj61gtwEUT78XEn7cDag+Ix00KxKW19kwuTl
+rRfNl6vOIeCzuSPaCaMjJJuY16L3IrFigtNmYzf5k5AALextXLWHbt4NAzr9MLU7
+UFwiEUs/FECtpeTqksv0wMXYfFnFWLLLUnPeW5gO7mXlNqVyV3b/+ptQrDgShE6i
+/a+jFZUfYYHGYhaFmcEX8hMCAwEAAQ==
 -----END PUBLIC KEY-----`,
 }
 
@@ -63,7 +81,7 @@ type signatureDoc struct {
 // checksum that arrived from the same origin as the artifact, so a compromised
 // release store can serve malicious bytes and a matching sha256. Trust here
 // rests on a key compiled into this binary, whose private half lives only
-// inside Key Vault. The manifest carries the artifact's sha256, so a valid
+// inside the signing service. The manifest carries the artifact's sha256, so a valid
 // signature over the manifest plus a matching checksum chains the artifact
 // back to the embedded key.
 //
@@ -164,7 +182,7 @@ func FetchSignature(ctx context.Context, client *http.Client, manifestURL string
 //
 // Test-only. It exists so packages that fetch manifests can serve signed
 // fixtures without each reimplementing the sidecar format, and because the
-// production key's private half lives in Key Vault and cannot sign in a test.
+// production key's private half lives in the signing service and cannot sign in a test.
 // This package is under internal/, so the seam cannot escape the module.
 func SigningFixtureForTesting(keyID string) (sign func(manifest []byte) []byte, restore func()) {
 	key, err := rsa.GenerateKey(rand.Reader, 2048)

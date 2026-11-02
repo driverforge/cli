@@ -16,9 +16,9 @@ import (
 	"testing"
 )
 
-// signer stands in for the Key Vault key: tests hold the private half only
-// because they have to produce signatures. In production it never leaves the
-// vault.
+// signer stands in for the release signing key: tests hold the private half
+// only because they have to produce signatures. In production it never leaves
+// the signing service.
 type signer struct {
 	id      string
 	private *rsa.PrivateKey
@@ -102,7 +102,7 @@ func TestVerifyManifestRefusesUntrustedInput(t *testing.T) {
 	t.Run("rejects a signature made by a key we do not hold", func(t *testing.T) {
 		ours := newSigner(t, "release-v1")
 		// Same key id, different private key — an attacker who knows how our
-		// sidecars are shaped but not the Key Vault key.
+		// sidecars are shaped but not the signing key.
 		attacker := newSigner(t, "release-v1")
 		withTrustedKeys(t, ours)
 

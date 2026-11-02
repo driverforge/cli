@@ -33,32 +33,56 @@ import (
 
 const installScript = "../../scripts/install.sh"
 
-// pemInScript pulls the embedded public key out of the shell script's
-// PUBKEY_V1='…' assignment.
-var pemInScript = regexp.MustCompile(`(?s)PUBKEY_V1='(-----BEGIN PUBLIC KEY-----.*?-----END PUBLIC KEY-----)'`)
+// fixtureKeyID is the key the chain fixtures sign as: the one current releases
+// are signed with, so the script's path for it is the one under test.
+const fixtureKeyID = "release-signing-v2"
 
-// The installer carries its own copy of the signing key because it cannot import
-// this package. Two copies of a trust root is a drift hazard, so pin them
-// together: rotating the key here without updating the script would leave every
-// curl|sh install trusting a retired key.
-func TestInstallScriptEmbedsTheSameKey(t *testing.T) {
+// keysInScript pulls each embedded key out of the shell script's
+// KEY_ID_VN="…" / PUBKEY_VN='…' pair, keyed by the id.
+var keysInScript = regexp.MustCompile(`(?s)KEY_ID_(V\d+)="([^"]+)"\s+PUBKEY_(V\d+)='(-----BEGIN PUBLIC KEY-----.*?-----END PUBLIC KEY-----)'`)
+
+// The installer carries its own copy of the signing keys because it cannot
+// import this package. Two copies of a trust root is a drift hazard, so pin them
+// together: rotating a key here without updating the script would leave every
+// curl|sh install trusting a retired key, or refusing the current one.
+func TestInstallScriptEmbedsTheSameKeys(t *testing.T) {
 	src, err := os.ReadFile(installScript)
 	if err != nil {
 		t.Fatalf("reading %s: %v", installScript, err)
 	}
 
-	m := pemInScript.FindSubmatch(src)
-	if m == nil {
-		t.Fatal("no PUBKEY_V1 public key found in the install script")
+	inScript := map[string]string{}
+	for _, m := range keysInScript.FindAllSubmatch(src, -1) {
+		if string(m[1]) != string(m[3]) {
+			t.Errorf("install script pairs KEY_ID_%s with PUBKEY_%s", m[1], m[3])
+		}
+		inScript[string(m[2])] = normalisePEM(string(m[4]))
 	}
-	got := normalisePEM(string(m[1]))
 
-	want, ok := trustedKeys["release-signing-v1"]
-	if !ok {
-		t.Fatal(`trustedKeys has no "release-signing-v1" — the install script pins that id`)
+	for id, want := range trustedKeys {
+		got, ok := inScript[id]
+		if !ok {
+			t.Errorf("install script does not embed %q, which trustedKeys trusts", id)
+			continue
+		}
+		if got != normalisePEM(want) {
+			t.Errorf("install script's embedded key does not match trustedKeys[%s]\nscript:\n%s\n\npackage:\n%s", id, got, normalisePEM(want))
+		}
 	}
-	if got != normalisePEM(want) {
-		t.Errorf("install script's embedded key does not match trustedKeys[release-signing-v1]\nscript:\n%s\n\npackage:\n%s", got, normalisePEM(want))
+	for id := range inScript {
+		if _, ok := trustedKeys[id]; !ok {
+			t.Errorf("install script embeds %q, which trustedKeys does not trust", id)
+		}
+	}
+}
+
+// Every embedded key must parse as the RSA key the verifier expects; a key that
+// is pasted in wrong would otherwise only show up when a release is installed.
+func TestTrustedKeysParse(t *testing.T) {
+	for id, encoded := range trustedKeys {
+		if _, err := parsePublicKey(encoded); err != nil {
+			t.Errorf("trustedKeys[%s]: %v", id, err)
+		}
 	}
 }
 
@@ -96,7 +120,7 @@ func TestInstallScriptVerifiesTheReleaseChain(t *testing.T) {
 		{
 			name: "signed with an unknown key",
 			breakIt: func(f *releaseFixture) {
-				f.sidecar = bytes.Replace(f.sidecar, []byte(`"release-signing-v1"`), []byte(`"release-signing-v9"`), 1)
+				f.sidecar = bytes.Replace(f.sidecar, []byte(`"`+fixtureKeyID+`"`), []byte(`"release-signing-v9"`), 1)
 			},
 			wantErr: "unknown key",
 		},
@@ -231,7 +255,7 @@ func signManifest(t *testing.T, key *rsa.PrivateKey, manifest []byte) []byte {
 	}
 	sidecar, err := json.Marshal(signatureDoc{
 		Alg:   signingAlg,
-		KeyID: "release-signing-v1",
+		KeyID: fixtureKeyID,
 		Sig:   base64.StdEncoding.EncodeToString(raw),
 	})
 	if err != nil {
@@ -281,11 +305,16 @@ func runInstaller(t *testing.T, f *releaseFixture, baseURL, installDir, pin stri
 	}
 	script = strings.Replace(script, realBase, testBase, 1)
 
-	m := pemInScript.FindStringSubmatch(script)
-	if m == nil {
-		t.Fatal("no PUBKEY_V1 in the install script")
+	var embedded string
+	for _, m := range keysInScript.FindAllStringSubmatch(script, -1) {
+		if m[2] == fixtureKeyID {
+			embedded = m[4]
+		}
 	}
-	script = strings.Replace(script, m[1], strings.TrimSpace(f.pubPEM), 1)
+	if embedded == "" {
+		t.Fatalf("no %s key in the install script", fixtureKeyID)
+	}
+	script = strings.Replace(script, embedded, strings.TrimSpace(f.pubPEM), 1)
 
 	path := filepath.Join(t.TempDir(), "install.sh")
 	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {

@@ -89,11 +89,14 @@
     esac
   }
 
-  # Public half of `release-signing-v1`. The private half is
-  # non-exportable and has never left the vault, so there is nothing secret here —
-  # this is exactly the value that should be reviewable in source, since it is the
-  # trust root for the binary this script installs. Mirrors trustedKeys in
+  # Public halves of the release signing keys. The private halves never reach a
+  # build machine, so there is nothing secret here — this is exactly the value
+  # that should be reviewable in source, since it is the trust root for the binary
+  # this script installs. Mirrors trustedKeys in
   # internal/releaseverify/signature.go; the two must agree.
+  #
+  # release-signing-v1 signed releases up to v0.8.5 and signs nothing new;
+  # release-signing-v2 signs every release after it.
   #
   # Rotation: the signature sidecar names its key id, so add the new key as another
   # case in pubkey_for() and keep the old one until no signed manifest references it.
@@ -107,6 +110,21 @@ WRSsCcuFkEUs9ZQQxnP6QWRyHIByZ6qM8l/zDOCKZD70rCz0jKBr7oRVkjvxJ2nG
 ZTf7bSPrDK6uCdGH3EwRoEZJemHnAvjv1HwZRKdOTAElsU2AEKpzf5lnWXRMS+3V
 OQIDAQAB
 -----END PUBLIC KEY-----'
+  KEY_ID_V2="release-signing-v2"
+  PUBKEY_V2='-----BEGIN PUBLIC KEY-----
+MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEAyZE6JXIc9y04KJc4y9no
+Tst3j//GKRAkvEkrtB0rCq7Nj8bu94O+xQSizFxtYUW9PeI3TaiHLUBtcbaiBglF
+hG6Q2mfPZuvFWdwE1I1+Sun7bU+xz27IQkSNiuVSLYhdXojFyPj4o21U2RFGUv6j
+n6tyi/0aZvuzmKlwxb8ooNNQCLK8y4aagZmKbYGCVEtACFweuMnppDAzzet+nVgZ
+bqvRbGO5LF5UKtUum0N9tG1EKNVUtywAGzyUI9rv6WkPo5d9y3DMS/6RnP/eNojR
+DTCNFE6E8t7A/pmXvY+OMhiqhfb5/6S+0ILW0p2kzomIRU5whD9dsW5uUWGuw/sF
+gXobjPPVyUrNceUNZZLEFW1VZPzXy2inVP6gbSsWB/VgQISD/ZOB8yqjAAYvzeqn
+p/+iaRc+HXlC5Tscukn/NfYbnfitGSq0bmWPqofX1PwaXt/lHPgwiuH+PXqHIWVg
+Aj8471t0/gjO8NXXsPITFdJJ4DVgyj61gtwEUT78XEn7cDag+Ix00KxKW19kwuTl
+rRfNl6vOIeCzuSPaCaMjJJuY16L3IrFigtNmYzf5k5AALextXLWHbt4NAzr9MLU7
+UFwiEUs/FECtpeTqksv0wMXYfFnFWLLLUnPeW5gO7mXlNqVyV3b/+ptQrDgShE6i
+/a+jFZUfYYHGYhaFmcEX8hMCAwEAAQ==
+-----END PUBLIC KEY-----'
 
   # pubkey_for echoes the embedded public key for a signature's key id, or nothing
   # when the id is unknown — which the caller must treat as fatal. Selecting by id
@@ -115,6 +133,7 @@ OQIDAQAB
   pubkey_for() {
     case "$1" in
       "$KEY_ID_V1") printf '%s\n' "$PUBKEY_V1" ;;
+      "$KEY_ID_V2") printf '%s\n' "$PUBKEY_V2" ;;
       *) return 1 ;;
     esac
   }
