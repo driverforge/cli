@@ -7,37 +7,34 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
-// DeviceLoginCard renders the device-authorization instructions as a card: the
-// verification URL (clickable where the terminal supports OSC-8) and the user
-// code boxed and emphasised. In a pipe/CI (non-terminal w) it returns the plain
+// DeviceLoginCard renders the device-authorization instructions as a
+// left-bordered block in the info accent. When the server supplies a complete
+// verification URL (completeURL, with the code embedded) that is the link shown,
+// and the code is displayed only so the user can check it matches the page —
+// the page pre-fills it and doesn't take input. Without one, it falls back to
+// the bare verifyURL plus the code to enter. The link is clickable where the
+// terminal supports OSC-8. In a pipe/CI (non-terminal w) it returns the plain
 // text form, so scripts and logs stay clean.
-func DeviceLoginCard(w io.Writer, verifyURL, userCode string) string {
-	if !isTerminalWriter(w) {
-		return fmt.Sprintf("To authorize driverforge, visit:\n\n    %s\n\nand enter the code:  %s", verifyURL, userCode)
+func DeviceLoginCard(w io.Writer, verifyURL, completeURL, userCode string) string {
+	link, codeLine := completeURL, "and check it shows this code:"
+	if completeURL == "" {
+		link, codeLine = verifyURL, "and enter this code:"
 	}
 
-	codeBox := lipgloss.NewStyle().
-		Bold(true).
-		Foreground(colInfoBright).
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(colInfo).
-		Padding(0, 3).
-		Render(userCode)
+	if !isTerminalWriter(w) {
+		return fmt.Sprintf("To authorize driverforge, visit:\n\n    %s\n\n%s  %s", link, codeLine, userCode)
+	}
 
 	rows := []string{
-		textRow(colInk, false, "To authorize driverforge, open this link in your browser:"),
+		blockRow(colInk, false, "To authorize driverforge, open this link in your browser:"),
 		"",
-		textRow(colInfoBright, true, linkify(verifyURL)),
+		// Not wrapped: the link must stay one piece to copy, and the complete
+		// URL with its code is longer than the block's content width.
+		lipgloss.NewStyle().Foreground(colInfoBright).Bold(true).Render("    " + linkify(link)),
 		"",
-		textRow(colInk, false, "and enter this code:"),
+		blockRow(colInk, false, codeLine),
 		"",
-		centerRow(codeBox),
+		blockRow(colInfoBright, true, "    "+userCode),
 	}
-	return card(colInfo, "Sign in", rows)
-}
-
-// centerRow centres pre-rendered content within a card-width row, padding it to
-// the same display width as textRow so the card borders stay aligned.
-func centerRow(content string) string {
-	return lipgloss.NewStyle().Width(cardWidth()).Padding(0, 2).Align(lipgloss.Center).Render(content)
+	return calloutBlock(colInfo, rows)
 }

@@ -72,30 +72,6 @@ func TestDissect(t *testing.T) {
 	}
 }
 
-// The framed card (login panel) must line up: every rendered line shares one
-// display width, whatever the title length or an emoji in a row.
-func TestCardAligned(t *testing.T) {
-	out := card(colInfo, "Sign in", []string{
-		textRow(colInk, true, `Unknown command "foo" for "driverforge"`),
-		"",
-		textRow(colTip, true, "💡  "+linkify("see https://go.driverforge.com/cli")),
-	})
-
-	lines := strings.Split(out, "\n")
-	if len(lines) < 3 {
-		t.Fatalf("card too short: %q", out)
-	}
-	want := lipgloss.Width(lines[0])
-	for i, ln := range lines {
-		if w := lipgloss.Width(ln); w != want {
-			t.Errorf("line %d width = %d, want %d: %q", i, w, want, ln)
-		}
-	}
-	if !strings.Contains(out, "SIGN IN") {
-		t.Errorf("title tab missing: %q", out)
-	}
-}
-
 // The callout block is a left-bordered message: every line carries the accent
 // bar, and there is no frame or title.
 func TestCalloutBlock(t *testing.T) {

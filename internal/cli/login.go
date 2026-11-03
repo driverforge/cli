@@ -42,7 +42,7 @@ func newLoginCmd() *cobra.Command {
 			}
 
 			fmt.Fprintln(out)
-			ui.Fprintln(out, ui.DeviceLoginCard(out, da.VerificationURI, da.UserCode))
+			ui.Fprintln(out, ui.DeviceLoginCard(out, da.VerificationURI, da.VerificationURIComplete, da.UserCode))
 			fmt.Fprintln(out)
 
 			openURL := da.VerificationURIComplete

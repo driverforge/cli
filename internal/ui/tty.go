@@ -59,17 +59,17 @@ func formWidth() int {
 	return avail
 }
 
-// cardWidth returns the inner content width for a bordered card (RenderUserError,
-// crash, device-login): the card's natural 70 columns, clamped to fit a narrow
-// terminal (the two border cells are outside this width). Cards render to stderr
-// (errors) or stdout (login), so it measures whichever is a terminal. Falls back
-// to the full width when neither is a TTY.
+// cardWidth returns the content width for a left-bar callout block
+// (RenderUserError, crash, device-login): a natural 70 columns, clamped to fit a
+// narrow terminal (the "┃ " bar prefix is outside this width). Blocks render to
+// stderr (errors) or stdout (login), so it measures whichever is a terminal.
+// Falls back to the full width when neither is a TTY.
 func cardWidth() int {
 	w, ok := terminalWidth()
 	if !ok {
 		return promptWidth
 	}
-	avail := w - 2 // the ╭…╮ / │…│ border cells
+	avail := w - 2 // the "┃ " bar prefix
 	switch {
 	case avail >= promptWidth:
 		return promptWidth

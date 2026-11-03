@@ -4,7 +4,7 @@ import "charm.land/lipgloss/v2"
 
 // Semantic accent palette. Each colour carries one meaning so panels read
 // consistently: violet/indigo for brand + informational surfaces (titles,
-// spinners, the login card), amber for warnings, red for errors. Amber and red
+// spinners, the login block), amber for warnings, red for errors. Amber and red
 // live with the error renderer (see error.go); the brand accent is here because
 // the shared TUI styles below build on it.
 var (

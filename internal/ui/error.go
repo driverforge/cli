@@ -16,8 +16,8 @@ import (
 	"github.com/driverforge/cli/internal/clierr"
 )
 
-// Error-rendering palette. The border + title carry the accent; the message is
-// clean and readable; the tip pops in a brighter tone within the same card.
+// Error-rendering palette. The left bar carries the accent; the message is
+// clean and readable; the tip pops in a brighter tone within the same block.
 var (
 	colAmber = lipgloss.Color("#D9A441") // accent: border for guidance user errors
 	colTip   = lipgloss.Color("#F4D58D") // brighter gold — the actionable tip
@@ -89,49 +89,9 @@ func RenderCrash(w io.Writer, err error) {
 	Fprintln(w, calloutBlock(colRed, rows))
 }
 
-// card frames pre-rendered content rows in a rounded box whose top border
-// carries an uppercase title tab: ╭─ TITLE ─────────╮. Empty rows become spacer
-// rows (top and bottom breathing room are added automatically). The inner width
-// is measured from a rendered spacer so the borders always line up with the
-// body, regardless of padding/emoji width quirks.
-func card(accent color.Color, title string, rows []string) string {
-	bar := lipgloss.NewStyle().Foreground(accent)
-	label := lipgloss.NewStyle().Bold(true).Foreground(colBack).Background(accent)
-
-	spacer := textRow(colInk, false, "")
-	width := lipgloss.Width(spacer)
-
-	tab := label.Render(" " + strings.ToUpper(title) + " ")
-	dashes := width - 1 - lipgloss.Width(tab)
-	if dashes < 0 {
-		dashes = 0
-	}
-	top := bar.Render("╭─") + tab + bar.Render(strings.Repeat("─", dashes)+"╮")
-	bottom := bar.Render("╰" + strings.Repeat("─", width) + "╯")
-
-	lines := []string{spacer} // top breathing room
-	for _, row := range rows {
-		if row == "" {
-			lines = append(lines, spacer)
-			continue
-		}
-		lines = append(lines, strings.Split(row, "\n")...)
-	}
-	lines = append(lines, spacer) // bottom breathing room
-
-	var b strings.Builder
-	b.WriteString(top + "\n")
-	for _, line := range lines {
-		b.WriteString(bar.Render("│") + line + bar.Render("│") + "\n")
-	}
-	b.WriteString(bottom)
-	return b.String()
-}
-
 // calloutBlock renders content rows as a left-bordered block: each line prefixed
-// with a thick accent-coloured bar (┃). Empty rows are the bar alone. Unlike a
-// framed card there is no top/bottom border and no title — the accent bar carries
-// the whole signal.
+// with a thick accent-coloured bar (┃). Empty rows are the bar alone. There is
+// no top/bottom border and no title — the accent bar carries the whole signal.
 func calloutBlock(accent color.Color, rows []string) string {
 	bar := lipgloss.NewStyle().Foreground(accent).Render("┃")
 	var lines []string
@@ -153,17 +113,11 @@ func blockRow(fg color.Color, bold bool, s string) string {
 	return lipgloss.NewStyle().Foreground(fg).Bold(bold).Width(cardWidth()).Render(s)
 }
 
-// textRow renders s into a card-width row (wrapping if needed), in the given
-// colour, optionally bold. Used by the framed card (login panel).
-func textRow(fg color.Color, bold bool, s string) string {
-	return lipgloss.NewStyle().Foreground(fg).Bold(bold).Width(cardWidth()).Padding(0, 2).Render(s)
-}
-
 var urlRe = regexp.MustCompile(`https?://[^\s]+`)
 
 // linkify wraps any URL in s as an OSC-8 hyperlink, so terminals that support it
 // make the docs link clickable. The visible text is unchanged (others just see
-// the URL), and the escapes are zero-width, so card layout is unaffected.
+// the URL), and the escapes are zero-width, so block layout is unaffected.
 func linkify(s string) string {
 	return urlRe.ReplaceAllStringFunc(s, func(u string) string {
 		return termenv.Hyperlink(u, u)
