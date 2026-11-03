@@ -225,13 +225,20 @@ jobs:
       # The bundle is published alongside the artifacts (below) rather than left
       # only in GitHub's attestation store, so `gh attestation verify --bundle`
       # works offline and without access to this repository.
+      #
+      # Public repositories only: GitHub's attestation store is not available to
+      # a private repository on the free plan, and the release failed on it
+      # (v0.8.6). The gate is the repository's visibility, so attestation comes
+      # back, and blocks a release again, the moment the repository is public.
       - name: Attest build provenance
         id: attest
+        if: github.event.repository.visibility == 'public'
         uses: actions/attest-build-provenance@v4
         with:
           subject-path: "dist/*.tar.gz,dist/*.zip"
 
       - name: Stage the attestation bundle for publishing
+        if: steps.attest.outcome == 'success'
         run: |
           set -euo pipefail
           cp "${{ steps.attest.outputs.bundle-path }}" dist/provenance.sigstore.jsonl
@@ -310,8 +317,10 @@ jobs:
           # The provenance bundle rides with the artifacts it describes, so it
           # can be verified without reaching GitHub — which matters while this
           # repository is private, and stays useful afterwards.
-          aws s3 cp dist/provenance.sigstore.jsonl "$DEST/$TAG/provenance.sigstore.jsonl" \
-            --content-type "application/jsonl" --cache-control "$IMMUTABLE"
+          if [ -e dist/provenance.sigstore.jsonl ]; then
+            aws s3 cp dist/provenance.sigstore.jsonl "$DEST/$TAG/provenance.sigstore.jsonl" \
+              --content-type "application/jsonl" --cache-control "$IMMUTABLE"
+          fi
 
           aws s3 cp manifest.json "$DEST/$TAG/manifest.json" --cache-control "$IMMUTABLE"
           aws s3 cp manifest.json.sig "$DEST/$TAG/manifest.json.sig" --cache-control "$IMMUTABLE"
@@ -425,9 +434,13 @@ jobs:
       # It also asserts the SBOM is actually there: GoReleaser's blob upload
       # selects artifacts by type, and if a version of it ever stopped including
       # SBOMs the release would otherwise ship silently without one.
+      #
+      # Provenance is only checked where it was attested: a public repository
+      # (see "Attest build provenance").
       - name: Verify the published provenance and SBOM
         env:
           GH_TOKEN: ${{ github.token }}
+          VISIBILITY: ${{ github.event.repository.visibility }}
         run: |
           set -euo pipefail
           TAG="${GITHUB_REF_NAME}"
@@ -437,13 +450,17 @@ jobs:
 
           work="$(mktemp -d)"
           curl -fsSL "$BASE/$ASSET" -o "$work/$ASSET"
-          curl -fsSL "$BASE/provenance.sigstore.jsonl" -o "$work/provenance.jsonl"
 
           # Fails if the archive is not covered by the bundle, or the bundle does
           # not name this repository as the builder.
-          gh attestation verify "$work/$ASSET" \
-            --bundle "$work/provenance.jsonl" \
-            --repo "$GITHUB_REPOSITORY"
+          if [ "$VISIBILITY" = public ]; then
+            curl -fsSL "$BASE/provenance.sigstore.jsonl" -o "$work/provenance.jsonl"
+            gh attestation verify "$work/$ASSET" \
+              --bundle "$work/provenance.jsonl" \
+              --repo "$GITHUB_REPOSITORY"
+          else
+            echo "provenance not attested: $GITHUB_REPOSITORY is $VISIBILITY"
+          fi
 
           curl -fsSL "$BASE/$ASSET.sbom.json" -o "$work/sbom.json"
           packages="$(jq '.packages | length' "$work/sbom.json")"
@@ -451,4 +468,4 @@ jobs:
             echo "::error::$ASSET.sbom.json lists $packages packages — that is not a usable SBOM"
             exit 1
           fi
-          echo "provenance verified, SBOM lists $packages packages"
+          echo "SBOM lists $packages packages"
