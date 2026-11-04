@@ -27,7 +27,7 @@ const overviewSlug = "cli"
 // argument count) as an expected clierr.UserError pointing at the relevant docs
 // page — so misuse renders as a friendly notice and is never reported to Sentry.
 func usageError(cmd *cobra.Command, err error) error {
-	return clierr.WrapT(err, "Invalid usage", capitalise(err.Error()), "see "+docsURL(cmd))
+	return clierr.WithExit(clierr.WrapT(err, "Invalid usage", capitalise(err.Error()), "see "+docsURL(cmd)), exitUsage)
 }
 
 // docsURL is the docs short link for cmd: the per-command slug for a real

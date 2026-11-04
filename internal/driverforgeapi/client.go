@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -26,6 +27,35 @@ type GraphError struct {
 }
 
 func (e *GraphError) Error() string { return "graph api: " + e.Message }
+
+// RateLimitError is an HTTP 429 from the graph. RetryAfter is the server's
+// requested wait, zero when it named none.
+type RateLimitError struct {
+	RetryAfter time.Duration
+}
+
+func (e *RateLimitError) Error() string {
+	return fmt.Sprintf("graph api: rate limited (retry after %s)", e.RetryAfter)
+}
+
+// parseRetryAfter reads a Retry-After header: delay-seconds or an HTTP date.
+// Anything unparseable, or a date in the past, is zero.
+func parseRetryAfter(v string, now time.Time) time.Duration {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return 0
+	}
+	if secs, err := strconv.Atoi(v); err == nil {
+		if secs < 0 {
+			return 0
+		}
+		return time.Duration(secs) * time.Second
+	}
+	if t, err := http.ParseTime(v); err == nil && t.After(now) {
+		return t.Sub(now)
+	}
+	return 0
+}
 
 // Client is an authenticated Graph API client.
 type Client struct {
@@ -46,10 +76,19 @@ type Organization struct {
 	Role string `json:"myRole"`
 }
 
+// defaultResponseLimit bounds a graph response body. Telemetry reads carry
+// whole driver payloads and use telemetryResponseLimit instead.
+const defaultResponseLimit = 1 << 20
+
 // do executes a GraphQL operation with the current user's bearer token,
 // decoding the `data` field into out. It surfaces auth.ErrNotLoggedIn (via
 // auth.Current), HTTP errors, and GraphQL errors.
 func (c *Client) do(ctx context.Context, query string, vars map[string]any, out any) error {
+	return c.doLimit(ctx, query, vars, out, defaultResponseLimit)
+}
+
+// doLimit is do with an explicit bound on the response body, in bytes.
+func (c *Client) doLimit(ctx context.Context, query string, vars map[string]any, out any, limit int64) error {
 	creds, err := auth.Current(ctx)
 	if err != nil {
 		return err
@@ -82,7 +121,11 @@ func (c *Client) do(ctx context.Context, query string, vars map[string]any, out 
 			Title:   "Session expired",
 			Message: "your session may have expired",
 			Hint:    "run `driverforge login` and try again",
+			Err:     auth.ErrSessionExpired,
 		}
+	}
+	if resp.StatusCode == http.StatusTooManyRequests {
+		return &RateLimitError{RetryAfter: parseRetryAfter(resp.Header.Get("Retry-After"), time.Now())}
 	}
 	if resp.StatusCode >= 500 {
 		// A gateway/backend hiccup (502/503/…): transient, retryable, not a CLI bug.
@@ -109,7 +152,7 @@ func (c *Client) do(ctx context.Context, query string, vars map[string]any, out 
 			} `json:"extensions"`
 		} `json:"errors"`
 	}
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&envelope); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, limit)).Decode(&envelope); err != nil {
 		return fmt.Errorf("graph api: decoding response: %w", err)
 	}
 	if len(envelope.Errors) > 0 {

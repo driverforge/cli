@@ -83,22 +83,7 @@ func NewWatcher(ctx context.Context, projectID string, getToken TokenFunc, match
 		return nil, err
 	}
 
-	cfg := centrifuge.Config{
-		Token: token,
-		Name:  "driverforge-cli",
-	}
-	// Centrifugo refuses WebSocket handshakes whose Origin isn't in allowed_origins
-	// (a browser CSRF guard). A headless client sends no Origin, so present the web
-	// app's — the same one browsers use — or the connection is silently rejected.
-	if origin := resolveCentrifugoOrigin(); origin != "" {
-		cfg.Header = http.Header{"Origin": []string{origin}}
-	}
-	if debugEnabled() {
-		cfg.LogLevel = centrifuge.LogLevelDebug
-		cfg.LogHandler = func(e centrifuge.LogEntry) { debugf("sdk[%s] %s %v", e.Level, e.Message, e.Fields) }
-	}
-
-	client := centrifuge.NewJsonClient(resolveCentrifugoURL(), cfg)
+	client := newClient(centrifuge.Config{Token: token})
 
 	sub, err := client.NewSubscription(channel(projectID))
 	if err != nil {
@@ -148,6 +133,24 @@ func NewWatcher(ctx context.Context, projectID string, getToken TokenFunc, match
 		return nil, err
 	}
 	return w, nil
+}
+
+// newClient builds a Centrifugo client for the telemetry endpoint from cfg,
+// adding what every CLI connection needs: its name, the web app's Origin, and
+// the SDK's debug log when DRIVERFORGE_DEBUG is set.
+func newClient(cfg centrifuge.Config) *centrifuge.Client {
+	cfg.Name = "driverforge-cli"
+	// Centrifugo refuses WebSocket handshakes whose Origin isn't in allowed_origins
+	// (a browser CSRF guard). A headless client sends no Origin, so present the web
+	// app's — the same one browsers use — or the connection is silently rejected.
+	if origin := resolveCentrifugoOrigin(); origin != "" {
+		cfg.Header = http.Header{"Origin": []string{origin}}
+	}
+	if debugEnabled() {
+		cfg.LogLevel = centrifuge.LogLevelDebug
+		cfg.LogHandler = func(e centrifuge.LogEntry) { debugf("sdk[%s] %s %v", e.Level, e.Message, e.Fields) }
+	}
+	return centrifuge.NewJsonClient(resolveCentrifugoURL(), cfg)
 }
 
 // clip bounds a byte slice for a debug line.

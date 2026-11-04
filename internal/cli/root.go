@@ -11,8 +11,10 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 
+	"github.com/driverforge/cli/internal/agentmode"
 	"github.com/driverforge/cli/internal/auth"
 	"github.com/driverforge/cli/internal/buildinfo"
+	"github.com/driverforge/cli/internal/clierr"
 	"github.com/driverforge/cli/internal/errreport"
 	"github.com/driverforge/cli/internal/metrics"
 	"github.com/driverforge/cli/internal/orgctx"
@@ -62,7 +64,7 @@ func Execute() (code int) {
 			ui.RenderUserError(os.Stderr, err)
 		}
 		errreport.Handle(err, lastInvocation, os.Stderr)
-		return 1
+		return clierr.ExitCode(err)
 	}
 	return 0
 }
@@ -91,7 +93,12 @@ func newRootCmd() *cobra.Command {
 			if isAuthOrMetaCmd(cmd) {
 				return // don't stack the consent prompt on meta/auth/org commands
 			}
-			cfg := metrics.EnsureConsent()
+			// A coding agent can't answer the consent prompt; it keeps whatever
+			// the person chose (or the default) without asking.
+			cfg := metrics.Load()
+			if !agentmode.Enabled() {
+				cfg = metrics.EnsureConsent()
+			}
 			metricsClient = metrics.New(cfg)
 			// Attach the signed-in account and active org (stored state only —
 			// no network, expiry irrelevant for attribution). Signed-out runs
@@ -106,7 +113,7 @@ func newRootCmd() *cobra.Command {
 		// Runs only after a command succeeds (skipped on error). Prints a
 		// "newer version available" notice when appropriate.
 		PersistentPostRun: func(cmd *cobra.Command, _ []string) {
-			if flagNoUpdateCheck || isAuthOrMetaCmd(cmd) || ownsTheUpdateStory(cmd) {
+			if flagNoUpdateCheck || agentmode.Enabled() || isAuthOrMetaCmd(cmd) || ownsTheUpdateStory(cmd) {
 				return // don't nag on meta/auth/org commands
 			}
 			updatecheck.Notify(cmd.Context(), buildinfo.Version, os.Stderr)
@@ -122,6 +129,7 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(newBuildCmd(), newInitCmd(), newPublishCmd(), newDeployCmd(), newSyncCmd(), newDebugCmd(), newVersionCmd())
 	root.AddCommand(newLoginCmd(), newLogoutCmd(), newWhoamiCmd(), newOrgCmd(), newDeviceCmd())
 	root.AddCommand(newUpgradeCmd(), newDoctorCmd())
+	root.AddCommand(newLogsCmd(), newErrorsCmd(), newEventsCmd(), newGetCmd())
 	installUsageErrors(root) // make unknown command/flag/arg errors friendly
 	return root
 }

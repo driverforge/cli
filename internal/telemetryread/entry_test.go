@@ -1,0 +1,174 @@
+package telemetryread
+
+import (
+	"bytes"
+	"encoding/json"
+	"regexp"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/driverforge/cli/internal/driverforgeapi"
+)
+
+var names = func(controller string) string {
+	if controller == "000FFF9BB74C" {
+		return "bench-a"
+	}
+	return ""
+}
+
+func TestEventPayloadRoundTripsExactly(t *testing.T) {
+	// A vendor response with an undocumented outer "data" wrapper, nulls and a
+	// key order that re-encoding through a map would change.
+	args := json.RawMessage(`{"zeta":1,"data":{"items":[{"id":7,"name":null}]},"alpha":"x"}`)
+	e := FromEvent(driverforgeapi.EventEntry{
+		TraceID: "0123456789abcdef0123456789abcdef", Name: "ReceivedFromNetwork",
+		Args: args, StartedAt: 1762247551482, Controller: "000FFF9BB74C", DriverVersion: "12",
+	}, names)
+
+	var payload struct {
+		Args   json.RawMessage `json:"args"`
+		Result json.RawMessage `json:"result"`
+	}
+	if err := json.Unmarshal(e.Payload, &payload); err != nil {
+		t.Fatalf("payload is not JSON: %v", err)
+	}
+	if !bytes.Equal(payload.Args, args) {
+		t.Errorf("args = %s, want the stored bytes %s", payload.Args, args)
+	}
+	if string(payload.Result) != "null" {
+		t.Errorf("absent result = %s, want null", payload.Result)
+	}
+	if e.Timestamp != "2025-11-04T09:12:31.482Z" {
+		t.Errorf("timestamp = %q", e.Timestamp)
+	}
+	if e.Device.ID != "000FFF9BB74C" || deref(e.Device.Name) != "bench-a" {
+		t.Errorf("device = %+v", e.Device)
+	}
+}
+
+func TestLogKeepsTextAsMessage(t *testing.T) {
+	text := `Vendor response: {"data":{"items":[]}}`
+	e := FromLog(driverforgeapi.LogEntry{ID: "l1", Level: "INFO", Message: text, CreatedAt: 1}, names)
+	if *e.Message != text || string(e.Payload) != "null" || *e.Level != "info" {
+		t.Errorf("log = message %q payload %s level %q", *e.Message, e.Payload, *e.Level)
+	}
+	if e.Device.Name != nil {
+		t.Errorf("unregistered controller got name %q", *e.Device.Name)
+	}
+}
+
+func TestEntryKeysAreTheAllowList(t *testing.T) {
+	for _, e := range []Entry{
+		FromLog(driverforgeapi.LogEntry{ID: "l1"}, nil),
+		FromEvent(driverforgeapi.EventEntry{TraceID: "t1"}, nil),
+		FromError(driverforgeapi.ErrorEntry{ID: "e1"}, nil),
+	} {
+		b, _ := json.Marshal(e)
+		var m map[string]json.RawMessage
+		_ = json.Unmarshal(b, &m)
+		for k := range m {
+			if !slices.Contains(AllowedKeys, k) {
+				t.Errorf("%s entry emits %q, outside the allow-list", e.Type, k)
+			}
+		}
+		if len(m) != len(AllowedKeys) {
+			t.Errorf("%s entry has %d keys, want every allowed key present (%d)", e.Type, len(m), len(AllowedKeys))
+		}
+	}
+}
+
+func TestFromPublication(t *testing.T) {
+	// The live record carries routing and device meta the contract must never
+	// emit; conversion keeps only mapped fields.
+	logPub := `{"type":"log","id":"l1","createdAt":1762247551482,"level":"WARN","message":"hi","traceId":"t","controller":"000FFF9BB74C","driver":"d.c4z","driverVersion":"12","organizationId":"org","meta":{"ip":"10.0.0.2"}}`
+	e, ok := FromPublication(json.RawMessage(logPub), names)
+	if !ok || e.Type != KindLog || *e.Level != "warn" || *e.DriverVersion != "12" {
+		t.Fatalf("log publication = %+v, %v", e, ok)
+	}
+	b, _ := json.Marshal(e)
+	if strings.Contains(string(b), "10.0.0.2") || strings.Contains(string(b), "organizationId") {
+		t.Errorf("publication meta leaked into the entry: %s", b)
+	}
+
+	errPub := `{"type":"error","errorType":"lua:runtime_error","id":"e1","value":"boom","createdAt":1,"controller":"c"}`
+	e, ok = FromPublication(json.RawMessage(errPub), nil)
+	if !ok || e.Type != KindError || !strings.Contains(string(e.Payload), `"type":"lua:runtime_error"`) {
+		t.Errorf("error publication = %s, %v", e.Payload, ok)
+	}
+
+	for _, pub := range []string{`{"type":"heartbeat"}`, `{"type":"log"}`, `not json`} {
+		if _, ok := FromPublication(json.RawMessage(pub), nil); ok {
+			t.Errorf("FromPublication(%s) accepted it", pub)
+		}
+	}
+}
+
+func TestTruncate(t *testing.T) {
+	// "é" is two bytes; a cap landing between them must back off to the
+	// boundary.
+	msg := "aé" + strings.Repeat("b", 10)
+	e := FromLog(driverforgeapi.LogEntry{ID: "l1", Message: msg}, nil)
+	if !Truncate(&e, 2) {
+		t.Fatal("over-cap message not truncated")
+	}
+	if *e.Message != "a" || e.Truncated.Field != "message" || e.Truncated.TotalBytes != len(msg) || e.Truncated.ReturnedBytes != 1 {
+		t.Errorf("message %q truncated %+v", *e.Message, e.Truncated)
+	}
+
+	ev := FromEvent(driverforgeapi.EventEntry{TraceID: "t", Args: json.RawMessage(`{"data":"` + strings.Repeat("x", 100) + `"}`)}, nil)
+	total := len(ev.Payload)
+	if !Truncate(&ev, 10) {
+		t.Fatal("over-cap payload not truncated")
+	}
+	var s string
+	if err := json.Unmarshal(ev.Payload, &s); err != nil || s != `{"args":{"` {
+		t.Errorf("truncated payload = %s, want a JSON string of the prefix", ev.Payload)
+	}
+	if ev.Truncated.Field != "payload" || ev.Truncated.TotalBytes != total || ev.Truncated.ReturnedBytes != 10 {
+		t.Errorf("truncated = %+v", ev.Truncated)
+	}
+
+	small := FromLog(driverforgeapi.LogEntry{Message: "ok"}, nil)
+	if Truncate(&small, 0) || Truncate(&small, 10) || small.Truncated != nil {
+		t.Error("an entry within the cap, or with no cap, was truncated")
+	}
+}
+
+func TestFilterMatch(t *testing.T) {
+	at := time.Date(2026, 11, 4, 9, 0, 0, 0, time.UTC)
+	e := FromLog(driverforgeapi.LogEntry{
+		ID: "l1", Level: "ERROR", Message: `got {"Data":1}`, TraceID: "t1", EventName: "OnTimer",
+		Driver: "d.c4z", DriverVersion: "12", Controller: "MAC", CreatedAt: float64(at.UnixMilli()),
+	}, nil)
+
+	pass := []Filter{
+		{},
+		{Kind: KindLog, Controller: "MAC", Drivers: []string{"d.c4z"}, DriverVersion: "12", Levels: []string{"warn", "error"}},
+		{CorrelationID: "t1", Name: "OnTimer", Fields: map[string]string{"level": "error", "driver": "d.c4z"}},
+		{Grep: regexp.MustCompile(`(?i)"data"`)},
+		{Since: at, Until: at},
+	}
+	for i, f := range pass {
+		if !f.Match(e) {
+			t.Errorf("pass[%d] rejected the entry", i)
+		}
+	}
+	fail := []Filter{
+		{Kind: KindEvent},
+		{Controller: "OTHER"},
+		{DriverVersion: "11"},
+		{Levels: []string{"info"}},
+		{Fields: map[string]string{"controller": "OTHER"}},
+		{Grep: regexp.MustCompile(`"data"`)}, // case-sensitive
+		{Since: at.Add(time.Millisecond)},
+		{Until: at.Add(-time.Millisecond)},
+	}
+	for i, f := range fail {
+		if f.Match(e) {
+			t.Errorf("fail[%d] accepted the entry", i)
+		}
+	}
+}

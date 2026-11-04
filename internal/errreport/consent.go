@@ -49,6 +49,18 @@ func Handle(err error, inv Invocation, out io.Writer) {
 	dispatch(err, nil, inv, out)
 }
 
+// ReportQuietly reports err only when the user has already agreed to error
+// reporting, and never prompts or prints. It returns the report's reference, or
+// "" when nothing was sent. For machine-readable output, where a prompt or a
+// stray line would corrupt the stream and the reference is carried in the
+// structured error instead.
+func ReportQuietly(err error, inv Invocation) string {
+	if !enabled() || !Reportable(err) || metrics.Load().ErrorReportingConsent != metrics.ConsentGranted {
+		return ""
+	}
+	return send(err, nil, inv)
+}
+
 // HandlePanic reports a recovered panic (always a candidate — it's a crash).
 // It must be called from inside the recovering deferred function: at that
 // point the panicking frames are still live (deferred functions run from

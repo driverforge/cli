@@ -49,6 +49,10 @@ type UserError struct {
 	// guidance style (amber) — for an operation that failed outright (e.g. a
 	// build), as opposed to a precondition the user can go fix. Set via AsFatal.
 	Fatal bool
+	// Exit is the process exit status; zero means the default, 1. Commands
+	// with a documented exit-code contract (the telemetry readers) set it so a
+	// script can branch on the status. Set via WithExit.
+	Exit int
 }
 
 // Error renders the message with the hint appended in parentheses, so a
@@ -116,4 +120,27 @@ func AsFatal(err error) error {
 func IsFatal(err error) bool {
 	var ue *UserError
 	return errors.As(err, &ue) && ue.Fatal
+}
+
+// WithExit sets the process exit status err should produce, when err is a
+// UserError, and returns err. Other errors are bugs and keep the default.
+func WithExit(err error, code int) error {
+	var ue *UserError
+	if errors.As(err, &ue) {
+		ue.Exit = code
+	}
+	return err
+}
+
+// ExitCode is the process exit status for err: 0 for nil, a UserError's Exit
+// when set, otherwise 1.
+func ExitCode(err error) int {
+	if err == nil {
+		return 0
+	}
+	var ue *UserError
+	if errors.As(err, &ue) && ue.Exit != 0 {
+		return ue.Exit
+	}
+	return 1
 }

@@ -64,6 +64,10 @@ internal/auth/       OAuth2 device flow + token storage (keychain, 0600 fallback
 internal/agent/      client for the on-controller agent (deploy, sync, logs)
 internal/driverforgeapi/  Driverforge GraphQL API client
 internal/telemetry/  live driver telemetry (Centrifugo websocket)
+internal/telemetryread/  reading telemetry back: entry contract, filters,
+                     paging, wait/follow (logs, errors, events, get)
+internal/deployrecord/   what this machine last deployed (--version current)
+internal/agentmode/  detects a coding agent driving the CLI
 internal/clierr/     UserError — expected, user-facing failures
 internal/errreport/  opt-in crash reporting
 pkg/c4z/             the build library: manifest, squish, driverxml,
