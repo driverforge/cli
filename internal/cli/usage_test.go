@@ -19,9 +19,9 @@ func TestUsageErrorsAreFriendly(t *testing.T) {
 		wantURL string
 	}{
 		{"unknown command", []string{"foo"}, docsBaseURL + "/" + overviewSlug},
-		{"too many args", []string{"build", "x", "y"}, docsBaseURL + "/build"},
-		{"unknown flag", []string{"build", "--nope"}, docsBaseURL + "/build"},
-		{"unknown subcommand", []string{"org", "show", "z", "q"}, docsBaseURL + "/org"},
+		{"too many args", []string{"build", "x", "y"}, docsBaseURL + "/cli-build"},
+		{"unknown flag", []string{"build", "--nope"}, docsBaseURL + "/cli-build"},
+		{"unknown subcommand", []string{"org", "show", "z", "q"}, docsBaseURL + "/cli-org"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -58,11 +58,11 @@ func TestDocsURL(t *testing.T) {
 	if got := docsURL(root); got != docsBaseURL+"/"+overviewSlug {
 		t.Errorf("root docsURL = %q", got)
 	}
-	if got := docsURL(build); got != docsBaseURL+"/build" {
+	if got := docsURL(build); got != docsBaseURL+"/cli-build" {
 		t.Errorf("build docsURL = %q", got)
 	}
 	// A nested subcommand points at its top-level group, not the leaf.
-	if got := docsURL(sel); got != docsBaseURL+"/device" {
+	if got := docsURL(sel); got != docsBaseURL+"/cli-device" {
 		t.Errorf("nested docsURL = %q", got)
 	}
 }

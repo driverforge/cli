@@ -9,7 +9,7 @@ import (
 )
 
 // docsBaseURL is the short-link domain fronting the docs. Each top-level command
-// has a slug matching its own name (go.driverforge.com/build →
+// has a slug of its name behind commandSlugPrefix (go.driverforge.com/cli-build →
 // docs.driverforge.com/cli/build/), so a new top-level command needs its slug
 // minted in Shlink or its usage hint will 404.
 //
@@ -23,6 +23,10 @@ const docsBaseURL = "https://go.driverforge.com"
 // overviewSlug is the CLI docs landing page — the root command's hint.
 const overviewSlug = "cli"
 
+// commandSlugPrefix sets command slugs apart from the domain's other links, some
+// of which share a command's name (go.driverforge.com/get is the install script).
+const commandSlugPrefix = "cli-"
+
 // usageError wraps a cobra command-usage error (unknown command/flag, wrong
 // argument count) as an expected clierr.UserError pointing at the relevant docs
 // page — so misuse renders as a friendly notice and is never reported to Sentry.
@@ -31,10 +35,10 @@ func usageError(cmd *cobra.Command, err error) error {
 }
 
 // docsURL is the docs short link for cmd: the per-command slug for a real
-// subcommand (e.g. go.driverforge.com/build), or the overview for the root.
+// subcommand (e.g. go.driverforge.com/cli-build), or the overview for the root.
 func docsURL(cmd *cobra.Command) string {
 	if name := topLevelName(cmd); name != "" {
-		return docsBaseURL + "/" + name
+		return docsBaseURL + "/" + commandSlugPrefix + name
 	}
 	return docsBaseURL + "/" + overviewSlug
 }
