@@ -144,7 +144,7 @@ keeps text output.`,
 	root.SetVersionTemplate(buildinfo.String() + "\n")
 	root.AddCommand(newBuildCmd(), newInitCmd(), newPublishCmd(), newDeployCmd(), newSyncCmd(), newDebugCmd(), newVersionCmd())
 	root.AddCommand(newLoginCmd(), newLogoutCmd(), newWhoamiCmd(), newOrgCmd(), newDeviceCmd())
-	root.AddCommand(newUpgradeCmd(), newDoctorCmd())
+	root.AddCommand(newUpgradeCmd(), newDoctorCmd(), newSkillsCmd())
 	root.AddCommand(newLogsCmd(), newErrorsCmd(), newEventsCmd(), newGetCmd())
 	installUsageErrors(root) // make unknown command/flag/arg errors friendly
 	return root

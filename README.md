@@ -68,6 +68,8 @@ internal/telemetryread/  reading telemetry back: entry contract, filters,
                      paging, wait/follow (logs, errors, events, get)
 internal/deployrecord/   what this machine last deployed (--version current)
 internal/agentmode/  detects a coding agent, and when output is structured
+internal/skills/     agent skills shipped in the binary (driverforge skills install);
+                     tests in internal/cli hold them to the CLI's flags and codes
 internal/clierr/     UserError — expected, user-facing failures
 internal/errreport/  opt-in crash reporting
 pkg/c4z/             the build library: manifest, squish, driverxml,

@@ -78,6 +78,10 @@ const (
 	// Live debugging.
 	codeRuntimeUnavailable = "runtime_unavailable"
 
+	// Agent skills.
+	codeSkillNotFound = "skill_not_found"
+	codeSkillConflict = "skill_conflict"
+
 	// Commands that can't run without a person.
 	codeInteractiveRequired = "interactive_required"
 	codeNotAvailable        = "not_available"
