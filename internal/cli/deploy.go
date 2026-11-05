@@ -643,11 +643,7 @@ func agentAddr(dev orgctx.Device) (addr string, ok bool) {
 	if host == "" {
 		return "", false
 	}
-	port := agentPort
-	if p := os.Getenv("DRIVERFORGE_AGENT_PORT"); p != "" {
-		port = p
-	}
-	return net.JoinHostPort(host, port), true
+	return net.JoinHostPort(host, agentPortInUse()), true
 }
 
 // structuralHashOfC4z reads driver.xml from the built .c4z and hashes it.

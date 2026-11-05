@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"os"
 	"sync"
 	"time"
 
@@ -20,6 +21,15 @@ const deviceScanWindow = 6 * time.Second
 
 // agentPort is the controller's deploy-server (and probe) port.
 const agentPort = "9443"
+
+// agentPortInUse is agentPort, or DRIVERFORGE_AGENT_PORT when the agent's
+// Deploy Server Port property has been changed.
+func agentPortInUse() string {
+	if p := os.Getenv("DRIVERFORGE_AGENT_PORT"); p != "" {
+		return p
+	}
+	return agentPort
+}
 
 // runDeviceListTUI shows the graph's devices with a live presence dot, fed by two
 // signals: SSDP advertisements (same-segment, fresh address) and a direct TCP
@@ -55,7 +65,7 @@ func probeReachability(ctx context.Context, devices []driverforgeapi.Device, onR
 		wg.Add(1)
 		go func(host, mac string) {
 			defer wg.Done()
-			if reachable(ctx, net.JoinHostPort(host, agentPort), 2*time.Second) {
+			if reachable(ctx, net.JoinHostPort(host, agentPortInUse()), 2*time.Second) {
 				onReachable(mac)
 			}
 		}(host, mac)
