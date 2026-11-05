@@ -89,6 +89,7 @@ func Load(projectRoot string) (*Config, error) {
 		// The file is hand-editable and committed, so broken JSON (merge
 		// conflict markers, trailing commas) is an anticipated condition.
 		return nil, &clierr.UserError{
+			Code:    clierr.CodeInvalidConfig,
 			Title:   "Corrupt .driverforge/config.json",
 			Message: "couldn't parse " + Path(projectRoot),
 			Hint:    "fix the JSON (check for merge-conflict markers), or delete the file and re-run `driverforge init`",

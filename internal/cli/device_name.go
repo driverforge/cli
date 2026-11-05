@@ -39,12 +39,15 @@ func newDeviceNameCmd() *cobra.Command {
 			}
 			switch {
 			case clearFlag && name != "":
-				return clierr.User("--clear takes no name", "run `driverforge device name --clear` on its own")
+				return clierr.WithCode(clierr.User("--clear takes no name", "run `driverforge device name --clear` on its own"), codeUsage)
 			case !clearFlag && name == "":
-				return clierr.User("no name given",
-					"run `driverforge device name <name>`, or `--clear` to remove the current one")
+				return clierr.WithCode(clierr.User("no name given",
+					"run `driverforge device name <name>`, or `--clear` to remove the current one"), codeUsage)
 			}
-			return runDeviceName(cmd.Context(), cmd.OutOrStdout(), name)
+			if err := runDeviceName(cmd.Context(), textOut(cmd), name); err != nil {
+				return err
+			}
+			return emit(cmd, deviceShowOut{Device: currentDeviceOut()}, noText)
 		},
 	}
 	cmd.Flags().BoolVar(&clearFlag, "clear", false, "clear the name; the controller falls back to its hostname")
@@ -121,14 +124,14 @@ func checkNameAvailable(devices []driverforgeapi.Device, selfID, name string) er
 			continue // renaming a device to what it already is, is fine
 		}
 		if strings.EqualFold(d.FriendlyName, name) {
-			return clierr.User(
+			return clierr.WithCode(clierr.User(
 				fmt.Sprintf("another controller in this organization is already named %q", name),
-				"pick a different name, or rename that controller first (`driverforge device list`)")
+				"pick a different name, or rename that controller first (`driverforge device list`)"), codeNameTaken)
 		}
 		if strings.EqualFold(d.Hostname, name) {
-			return clierr.User(
+			return clierr.WithCode(clierr.User(
 				fmt.Sprintf("%q is another controller's hostname", name),
-				"pick a different name — `--device` matches hostnames too, so this one would be ambiguous")
+				"pick a different name — `--device` matches hostnames too, so this one would be ambiguous"), codeNameTaken)
 		}
 	}
 	return nil
@@ -143,13 +146,13 @@ func deviceNameErr(err error, dev orgctx.Device, orgName string) error {
 		msg := strings.ToLower(ge.Message)
 		switch {
 		case strings.Contains(msg, "not found"):
-			return clierr.WrapT(err, "Device not in this organization",
+			return clierr.WithCode(clierr.WrapT(err, "Device not in this organization",
 				fmt.Sprintf("%s isn't registered to %s, so it has no name to set there", dev.Name, orgName),
-				"deploy to it once to associate it, or add it in the Anvil UI")
+				"deploy to it once to associate it, or add it in the Anvil UI"), codeDeviceNotFound)
 		case strings.Contains(msg, "forbidden") || strings.Contains(msg, "permission") || ge.Code == "FORBIDDEN":
-			return clierr.WrapT(err, "Not allowed to rename devices",
+			return clierr.WithCode(clierr.WrapT(err, "Not allowed to rename devices",
 				fmt.Sprintf("naming a controller changes it for everyone in %s, which your role can't do", orgName),
-				"ask an organization admin to name it, or to grant you edit access")
+				"ask an organization admin to name it, or to grant you edit access"), codeForbidden)
 		}
 	}
 	return err

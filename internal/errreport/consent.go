@@ -61,6 +61,16 @@ func ReportQuietly(err error, inv Invocation) string {
 	return send(err, nil, inv)
 }
 
+// ReportPanicQuietly is ReportQuietly for a recovered panic. Like HandlePanic
+// it must be called from inside the recovering deferred function, so the
+// stack still shows where the panic started.
+func ReportPanicQuietly(recovered any, inv Invocation) string {
+	if !enabled() || metrics.Load().ErrorReportingConsent != metrics.ConsentGranted {
+		return ""
+	}
+	return send(fmt.Errorf("panic: %v", recovered), debug.Stack(), inv)
+}
+
 // HandlePanic reports a recovered panic (always a candidate — it's a crash).
 // It must be called from inside the recovering deferred function: at that
 // point the panicking frames are still live (deferred functions run from

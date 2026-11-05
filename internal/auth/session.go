@@ -122,6 +122,7 @@ var ErrSessionExpired = errors.New("session expired")
 func sessionExpiredError(cause error) *clierr.UserError {
 	cause = fmt.Errorf("%w: %w", ErrSessionExpired, cause)
 	return &clierr.UserError{
+		Code:    clierr.CodeAuthRequired,
 		Title:   "Session expired",
 		Message: "your sign-in has expired or been revoked",
 		Hint:    "run `driverforge login` to sign in again",
@@ -133,6 +134,7 @@ func sessionExpiredError(cause error) *clierr.UserError {
 // failure (server_error, outage, malformed response) — transient, try again.
 func signInUnavailableError(cause error) *clierr.UserError {
 	return &clierr.UserError{
+		Code:    clierr.CodeServiceUnavailable,
 		Title:   "Sign-in service unavailable",
 		Message: "couldn't refresh your session — the sign-in service is having trouble",
 		Hint:    "try again in a moment; if it persists, run `driverforge login`",

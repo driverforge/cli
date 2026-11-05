@@ -43,7 +43,7 @@ func newDeployCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			// Deploy builds with the next version per the project's scheme —
 			// Director won't reload a driver whose <version> hasn't increased.
-			if !ui.Interactive(flagNoTUI) {
+			if !ui.Interactive(flagNoTUI) && !structured() {
 				res, err := buildForDeploy(cmd, configuration)
 				if err != nil {
 					return err
@@ -75,28 +75,33 @@ func shouldRefreshNavigators(force bool, prevHash, newHash string) bool {
 // escalation to a full deploy; the interactive path runs under a run frame
 // instead (runDeployFramed).
 func runDeploy(ctx context.Context, out io.Writer, c4zPath, artifactName, pref string, forceSelect, forceRefresh bool) error {
-	// The heading titles the whole operation and sits above the resolve/connect
-	// steps that follow. Lead with the remembered controller when we have one;
-	// otherwise (a picker or --device decides the target) print it once known.
-	action := "Deploying " + artifactName + " to"
-	heading := ""
-	if pref == "" && !forceSelect {
-		if cur, err := orgctx.CurrentDevice(); err == nil {
-			heading = cur.Name
-		}
-	}
-	if heading != "" {
-		ui.Fprintln(out, "\n"+ui.DeployHeading(action, heading))
-	}
-
-	dev, err := resolveDeployDevice(ctx, out, pref, forceSelect)
+	dev, _, err := headedTarget(ctx, out, "Deploying "+artifactName+" to", pref, forceSelect, resolveDeployDevice)
 	if err != nil {
 		return err
 	}
-	if heading == "" {
+	return runDeployToDevice(ctx, out, dev, c4zPath, artifactName, forceRefresh)
+}
+
+// headedTarget resolves the device a plain deploy or sync ships to, printing
+// the heading that titles the operation above the resolve/connect steps that
+// follow. It leads with the remembered controller when there is one;
+// otherwise the heading prints once resolve decides. early reports whether the
+// heading came before resolution, so it isn't followed by another gap.
+func headedTarget(ctx context.Context, out io.Writer, action, pref string, forceSelect bool,
+	resolve func(context.Context, io.Writer, string, bool) (orgctx.Device, error)) (dev orgctx.Device, early bool, err error) {
+	if pref == "" && !forceSelect {
+		if cur, cerr := orgctx.CurrentDevice(); cerr == nil {
+			ui.Fprintln(out, "\n"+ui.DeployHeading(action, cur.Name))
+			early = true
+		}
+	}
+	if dev, err = resolve(ctx, out, pref, forceSelect); err != nil {
+		return dev, early, err
+	}
+	if !early {
 		ui.Fprintln(out, "\n"+ui.DeployHeading(action, dev.Name))
 	}
-	return runDeployToDevice(ctx, out, dev, c4zPath, artifactName, forceRefresh)
+	return dev, early, nil
 }
 
 // runDeployToDevice is runDeploy after device resolution: connect, stream the
@@ -206,7 +211,7 @@ const (
 // build + find + connect + deploy runs under a single in-place run frame.
 func runDeployFramed(cmd *cobra.Command, configuration, pref string, forceSelect, forceRefresh bool) error {
 	ctx := cmd.Context()
-	out := cmd.OutOrStdout()
+	out := textOut(cmd)
 	opts, err := deployBuildOptions(configuration)
 	if err != nil {
 		return err
@@ -216,7 +221,31 @@ func runDeployFramed(cmd *cobra.Command, configuration, pref string, forceSelect
 		return err
 	}
 	defer metricsClient.Flush(ctx)
-	return deployFramedTo(ctx, out, opts, configuration, target, resolve, forceRefresh)
+	shipped, err := deployFramedTo(ctx, out, opts, configuration, target, resolve, forceRefresh)
+	if err != nil {
+		return err
+	}
+	return emit(cmd, shipped, noText)
+}
+
+// shipOut is what deploy and sync report in structured output.
+type shipOut struct {
+	// Action is what reached the controller: "deploy" (a full reload) or
+	// "sync" (a Lua hot-swap). Reason says why a sync became a deploy.
+	Action string       `json:"action"`
+	Reason *string      `json:"reason"`
+	Build  buildOut     `json:"build"`
+	Device deviceRefOut `json:"device"`
+	// State is the deploy's outcome — confirmed, confirmed_with_errors or
+	// unconfirmed — or "synced".
+	State     string  `json:"state"`
+	Version   *string `json:"version"`
+	ReportURL *string `json:"report_url"`
+	// Instances are the driver instances a sync hot-swapped; Verified is
+	// whether it was checked against the last deploy's driver.xml.
+	Instances []string  `json:"instances,omitempty"`
+	Verified  *bool     `json:"verified,omitempty"`
+	Warnings  []warning `json:"warnings"`
 }
 
 // deployFramedTo runs the full build + deploy under one run frame, resolving
@@ -225,18 +254,20 @@ func runDeployFramed(cmd *cobra.Command, configuration, pref string, forceSelect
 // a full deploy (which reuses the device sync already resolved). When the
 // driver isn't in the director's project yet and the agent can bootstrap, the
 // frame ends amber and the first-install wizard runs after it.
-func deployFramedTo(ctx context.Context, out io.Writer, opts c4z.Options, configuration, target string, resolve deviceResolver, forceRefresh bool) error {
+func deployFramedTo(ctx context.Context, out io.Writer, opts c4z.Options, configuration, target string, resolve deviceResolver, forceRefresh bool) (shipOut, error) {
 	// The wizard runs after the frame with the command's context — the frame's
 	// work context is cancelled on teardown, and the wizard waits on the user.
 	var bootstrap func(ctx context.Context) error
-	err := ui.RunFrame(ctx, ui.FrameOptions{
+	shipped := shipOut{Action: "deploy"}
+	warnings, err := runFrame(ctx, out, ui.FrameOptions{
 		Step:        "Deploying to " + target + "…",
 		DetailsOpen: flagVerbose,
-	}, func(ctx context.Context, f *ui.Frame) error {
+	}, func(ctx context.Context, f ui.Progress) error {
 		res, err := buildInFrame(ctx, f, opts, configuration)
 		if err != nil {
 			return err
 		}
+		shipped.Build = buildOutOf(res, configuration)
 		filename := res.ArtifactName + ".c4z"
 		hash, err := structuralHashOfC4z(res.C4zPath)
 		if err != nil {
@@ -254,6 +285,7 @@ func deployFramedTo(ctx context.Context, out io.Writer, opts c4z.Options, config
 		}
 		f.Logf("✓ %s", connectedLabel(dev, h))
 		f.Row("controller", dev.Name)
+		shipped.Device = deviceRefOf(dev, h)
 		if !h.Supports("deploy") {
 			return agentMissingCapabilityErr(dev, "deploy", h.AgentVersion)
 		}
@@ -271,13 +303,14 @@ func deployFramedTo(ctx context.Context, out io.Writer, opts c4z.Options, config
 
 		optIn := h.Supports(agent.CapabilityDeployStream) // stream only when advertised
 		localVersion := driverVersionFromC4z(res.C4zPath)
-		state, err := deployStreamInFrame(dctx, f, cl, dev, filename, hash, body, optIn, h.AgentVersion, localVersion)
+		terminal, err := deployStreamInFrame(dctx, f, cl, dev, filename, hash, body, optIn, h.AgentVersion, localVersion)
 		if err != nil {
 			// First deploy: the driver isn't in the director's project yet. If the
 			// agent can bootstrap, end the frame amber and run the install wizard
 			// after it (the wizard drives its own prompts and waits on the user, so
-			// it uses the parent ctx, not the deploy timeout).
-			if agent.Code(err) == agent.CodeNotInProject && h.Supports(agent.CapabilityBootstrap) {
+			// it uses the parent ctx, not the deploy timeout). Structured output
+			// has nobody to answer the wizard, so it reports the condition.
+			if !structured() && agent.Code(err) == agent.CodeNotInProject && h.Supports(agent.CapabilityBootstrap) {
 				f.Warnf("the driver isn't in the project on %s yet", dev.Name)
 				f.Step("First-install setup required")
 				bootstrap = func(ctx context.Context) error {
@@ -287,8 +320,9 @@ func deployFramedTo(ctx context.Context, out io.Writer, opts c4z.Options, config
 			}
 			return err
 		}
+		shipped.State, shipped.Version, shipped.ReportURL = string(terminal.State), optional(terminal.Version), optional(terminal.ReportURL)
 		recordDeploy(dev, filename, localVersion)
-		if deployConfirmed(state) {
+		if deployConfirmed(terminal.State) {
 			recordBaselineAndRefresh(ctx, deployedDriver{
 				Client: cl, Health: h, Device: dev,
 				Filename: filename, Hash: hash, Force: forceRefresh,
@@ -297,20 +331,14 @@ func deployFramedTo(ctx context.Context, out io.Writer, opts c4z.Options, config
 		}
 		return nil
 	})
+	shipped.Warnings = nonNilWarnings(warnings)
 	if err != nil {
-		return err
+		return shipped, err
 	}
 	if bootstrap != nil {
-		return bootstrap(ctx)
+		return shipped, bootstrap(ctx)
 	}
-	return nil
-}
-
-type deployProgress interface {
-	Step(string)
-	Logf(string, ...any)
-	Warnf(string, ...any)
-	Row(string, string)
+	return shipped, nil
 }
 
 // deployStreamInFrame streams the deploy reporting progress into the frame.
@@ -319,8 +347,9 @@ type deployProgress interface {
 // just reached ("driver written to controller") and belong in the log, not on
 // a spinner. The terminal event maps to the same outcomes the plain path uses
 // — a failure error, an amber warning for confirmed-with-errors / unconfirmed,
-// or the deployed-version success label.
-func deployStreamInFrame(ctx context.Context, f deployProgress, cl *agent.Client, dev orgctx.Device, filename, hash string, body io.Reader, optIn bool, oldAgentVersion, localVersion string) (agent.DeployState, error) {
+// or the deployed-version success label. It returns the terminal event, its
+// Version resolved to the version now running.
+func deployStreamInFrame(ctx context.Context, f ui.Progress, cl *agent.Client, dev orgctx.Device, filename, hash string, body io.Reader, optIn bool, oldAgentVersion, localVersion string) (agent.DeployEvent, error) {
 	f.Step("Uploading the driver…")
 	var lastStep string
 	terminal, sErr := streamDeploy(ctx, cl, dev, filename, hash, "", body, optIn, oldAgentVersion, func(e agent.DeployEvent) {
@@ -332,18 +361,19 @@ func deployStreamInFrame(ctx context.Context, f deployProgress, cl *agent.Client
 		f.Step(deployStateLabel(e))
 	})
 	if sErr != nil {
-		return "", friendlyDeployErr(dev, sErr)
+		return agent.DeployEvent{}, friendlyDeployErr(dev, sErr)
 	}
 	// The terminal event's Step carries the resolution text for the in-flight
 	// step (mirroring DeployModel.resolveLast).
 	resolved := firstNonEmpty(terminal.Step, lastStep)
 	version := firstNonEmpty(terminal.Version, localVersion)
+	terminal.Version = version
 	switch terminal.State {
 	case agent.StateFailed:
 		if resolved != "" {
 			f.Logf("✗ %s", resolved)
 		}
-		return terminal.State, deployFailErr(terminal)
+		return terminal, deployFailErr(terminal)
 	case agent.StateConfirmedWithErrors:
 		if resolved != "" {
 			f.Logf("✓ %s", resolved)
@@ -354,21 +384,21 @@ func deployStreamInFrame(ctx context.Context, f deployProgress, cl *agent.Client
 		}
 		f.Row("version", version)
 		f.Step(deployedLabel(version))
-		return terminal.State, nil
+		return terminal, nil
 	case agent.StateUnconfirmed:
 		if resolved != "" {
 			f.Logf("⚠ %s", resolved)
 		}
 		f.Warnf("%s", firstNonEmpty(terminal.Hint, "couldn't confirm the restart — check the controller"))
 		f.Step("Deployed (unconfirmed)")
-		return terminal.State, nil
+		return terminal, nil
 	default: // confirmed (and any unexpected terminal) → success
 		if resolved != "" {
 			f.Logf("✓ %s", resolved)
 		}
 		f.Row("version", version)
 		f.Step(deployedLabel(version))
-		return terminal.State, nil
+		return terminal, nil
 	}
 }
 
@@ -586,9 +616,9 @@ func connectedLabel(dev orgctx.Device, h agent.Health) string {
 func agentForDevice(ctx context.Context, dev orgctx.Device) (*agent.Client, error) {
 	addr, ok := agentAddr(dev)
 	if !ok {
-		return nil, clierr.User(
+		return nil, clierr.WithCode(clierr.User(
 			fmt.Sprintf("no network address on record for %s", dev.Name),
-			"re-select it with `driverforge device select`")
+			"re-select it with `driverforge device select`"), codeAgentUnreachable)
 	}
 
 	// Resolve the pinned TLS fingerprint: cached, else fetch by hardware id
@@ -602,9 +632,9 @@ func agentForDevice(ctx context.Context, dev orgctx.Device) (*agent.Client, erro
 		}
 	}
 	if fp == "" && os.Getenv("DRIVERFORGE_AGENT_INSECURE") == "" {
-		return nil, clierr.User(
+		return nil, clierr.WithCode(clierr.User(
 			fmt.Sprintf("no TLS certificate fingerprint on record for %s — the controller may not have finished registration", dev.Name),
-			"re-run `driverforge device select` once it's active (or set DRIVERFORGE_AGENT_INSECURE=1 for local testing)")
+			"re-run `driverforge device select` once it's active (or set DRIVERFORGE_AGENT_INSECURE=1 for local testing)"), codeCertificateChanged)
 	}
 
 	return agent.New("https://"+addr, fp), nil

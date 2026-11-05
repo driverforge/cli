@@ -20,7 +20,7 @@ func ExpectedIfAborted(err error) error {
 	if errors.Is(err, huh.ErrUserAborted) ||
 		errors.Is(err, tea.ErrProgramKilled) ||
 		errors.Is(err, tea.ErrInterrupted) {
-		return clierr.WrapT(err, "Cancelled", "No changes were made.", "")
+		return clierr.WithCode(clierr.WrapT(err, "Cancelled", "No changes were made.", ""), clierr.CodeInterrupted)
 	}
 	return err
 }

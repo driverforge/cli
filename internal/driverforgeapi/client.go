@@ -108,6 +108,7 @@ func (c *Client) doLimit(ctx context.Context, query string, vars map[string]any,
 	if err != nil {
 		// Transport failure (offline, DNS, TLS, timeout): anticipated, not a bug.
 		return &clierr.UserError{
+			Code:    clierr.CodeConnectionLost,
 			Title:   "Can't reach Driverforge",
 			Message: "the request to Driverforge couldn't be completed",
 			Hint:    "check your connection and try again",
@@ -118,6 +119,7 @@ func (c *Client) doLimit(ctx context.Context, query string, vars map[string]any,
 
 	if resp.StatusCode == http.StatusUnauthorized {
 		return &clierr.UserError{
+			Code:    clierr.CodeAuthRequired,
 			Title:   "Session expired",
 			Message: "your session may have expired",
 			Hint:    "run `driverforge login` and try again",
@@ -130,6 +132,7 @@ func (c *Client) doLimit(ctx context.Context, query string, vars map[string]any,
 	if resp.StatusCode >= 500 {
 		// A gateway/backend hiccup (502/503/…): transient, retryable, not a CLI bug.
 		return &clierr.UserError{
+			Code:    clierr.CodeServiceUnavailable,
 			Title:   "Driverforge is unavailable",
 			Message: "Driverforge returned a temporary error",
 			Hint:    "try again in a moment",

@@ -23,6 +23,9 @@ func PickOne(title string, choices []Choice, def string) (string, error) {
 // PickOneDesc is PickOne with a description line shown under the title — use it
 // when the choice benefits from a sentence of context.
 func PickOneDesc(title, description string, choices []Choice, def string) (string, error) {
+	if err := checkPrompt(title); err != nil {
+		return "", err
+	}
 	selected := def
 	opts := make([]huh.Option[string], len(choices))
 	for i, c := range choices {
@@ -69,6 +72,9 @@ func PromptOptional(title, description, suggested string) (string, error) {
 // promptInput renders the input and returns the trimmed value. The blank line
 // before the input sits under the description when there is one, else the title.
 func promptInput(title, description, initial string) (string, error) {
+	if err := checkPrompt(title); err != nil {
+		return "", err
+	}
 	v := initial
 	theme := formTheme()
 	if description == "" {
@@ -89,6 +95,9 @@ func promptInput(title, description, initial string) (string, error) {
 // returns the chosen values. Used by `driverforge upgrade` to opt into each available
 // upgrade.
 func MultiSelect(title string, choices []Choice) ([]string, error) {
+	if err := checkPrompt(title); err != nil {
+		return nil, err
+	}
 	selected := make([]string, 0, len(choices))
 	opts := make([]huh.Option[string], len(choices))
 	for i, c := range choices {
@@ -109,6 +118,9 @@ func MultiSelect(title string, choices []Choice) ([]string, error) {
 // Confirm presents an interactive yes/no prompt, returning the choice. def is
 // the pre-selected answer.
 func Confirm(title, description string, def bool) (bool, error) {
+	if err := checkPrompt(title); err != nil {
+		return false, err
+	}
 	v := def
 	form := huh.NewForm(
 		huh.NewGroup(

@@ -11,7 +11,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/driverforge/cli/internal/agentmode"
 	"github.com/driverforge/cli/internal/driverforgeapi"
 	"github.com/driverforge/cli/internal/telemetryread"
 )
@@ -89,7 +88,8 @@ With no flags inside a driver repo it reads the project in .driverforge/config.j
 and the device chosen with ` + "`driverforge device select`" + `. --org, --project,
 --device and --version are enough on their own, for CI. Entries print oldest first.
 
-Output is text on a terminal and JSON otherwise (and under a coding agent); stdout
+Output is text on a terminal and JSON otherwise (and under a coding agent, or with
+DRIVERFORGE_OUTPUT=json); stdout
 carries data only. Exit status: 0 ok, 1 failure, 2 usage, 3 wait timed out,
 4 not signed in, 5 scope unresolved or no deploy recorded, 6 rate limited, 130 interrupted.`,
 		Example: fmt.Sprintf(`  driverforge %[1]s --version current
@@ -135,7 +135,7 @@ func addScopeFlags(cmd *cobra.Command, s *scopeFlags) {
 // runRead is logs, errors and events.
 func runRead(cmd *cobra.Command, kind telemetryread.Kind, f readFlags) error {
 	stdout, stderr := cmd.OutOrStdout(), cmd.ErrOrStderr()
-	diag := diagnostics{w: stderr, json: agentmode.Enabled()}
+	diag := diagnostics{w: stderr, json: structured()}
 	o, err := f.validate(kind, stdout, time.Now())
 	if err != nil {
 		return reportFailure(err, o.format, stdout, diag)
@@ -195,7 +195,7 @@ func readWarnings(o readOpts, scope *telemetryScope, entries []telemetryread.Ent
 }
 
 // reportFailure writes a failure in the contract's shape and returns the exit.
-// Under an agent, stderr gets one JSON line; in the json formats stdout gets
+// Under structured output, stderr gets one JSON line; in the json formats stdout gets
 // the error object, so it always parses. A person at a terminal gets the
 // usual card, and an unexpected failure the usual crash report.
 func reportFailure(err error, format string, stdout io.Writer, diag diagnostics) error {

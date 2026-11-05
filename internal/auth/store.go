@@ -24,6 +24,7 @@ const keyringService = "driverforge-cli"
 // never reported to Sentry) wherever it surfaces; callers still match it with
 // errors.Is.
 var ErrNotLoggedIn = &clierr.UserError{
+	Code:    clierr.CodeAuthRequired,
 	Title:   "Not logged in",
 	Message: "you're not logged in",
 	Hint:    "run `driverforge login`",

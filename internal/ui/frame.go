@@ -255,6 +255,16 @@ type FrameOptions struct {
 	DetailsOpen bool   // start with the log expanded (--verbose)
 }
 
+// Progress is what work run under a frame reports through: the current step,
+// log lines, warnings and summary rows. *Frame implements it; so does any
+// renderer standing in for the frame where there's no terminal to draw on.
+type Progress interface {
+	Step(label string)
+	Logf(format string, a ...any)
+	Warnf(format string, a ...any)
+	Row(key, val string)
+}
+
 // Frame is the handle the work goroutine drives the frame through. All methods
 // are goroutine-safe (they post messages into the program).
 type Frame struct{ p *tea.Program }

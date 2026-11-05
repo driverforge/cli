@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -99,19 +100,19 @@ func prepareDebug(ctx context.Context, out io.Writer, o debugOptions) (debugEnv,
 		return env, err
 	}
 	if creds.Subject == "" {
-		return env, clierr.User("not signed in", "run `driverforge login` first")
+		return env, clierr.WithCode(clierr.User("not signed in", "run `driverforge login` first"), codeAuthRequired)
 	}
 	token, err := auth.MQTTAccessToken(ctx)
 	if err != nil {
 		if errors.Is(err, auth.ErrSessionExpired) {
-			return env, clierr.WrapT(err, "Session expired", "your sign-in has expired, so the debug session can't start",
-				"run `driverforge login`, then `driverforge debug` again")
+			return env, clierr.WithCode(clierr.WrapT(err, "Session expired", "your sign-in has expired, so the debug session can't start",
+				"run `driverforge login`, then `driverforge debug` again"), codeAuthRequired)
 		}
 		if ctx.Err() != nil {
 			return env, err
 		}
-		return env, clierr.WrapT(err, "Driverforge unreachable", "couldn't reach Driverforge to start the debug session",
-			"check your connection and try again")
+		return env, clierr.WithCode(clierr.WrapT(err, "Driverforge unreachable", "couldn't reach Driverforge to start the debug session",
+			"check your connection and try again"), codeConnectionLost)
 	}
 	endpoint, err := remote4.ResolveBroker()
 	if err != nil {
@@ -181,14 +182,21 @@ func connectDebugBroker(ctx context.Context, out io.Writer, env debugEnv) (remot
 		},
 	})
 	if err != nil {
-		return nil, clierr.Wrap(err, "couldn't connect to the Anvil broker at "+env.endpoint.URL,
-			"check your network, or set DRIVERFORGE_MQTT_URL for a local stack")
+		return nil, clierr.WithCode(clierr.Wrap(err, "couldn't connect to the Anvil broker at "+env.endpoint.URL,
+			"check your network, or set DRIVERFORGE_MQTT_URL for a local stack"), codeConnectionLost)
 	}
 	return broker, nil
 }
 
 func runDebug(cmd *cobra.Command, o debugOptions) error {
-	out := cmd.OutOrStdout()
+	out := textOut(cmd)
+	// The session's events are its output: lines for a person, or one JSON
+	// object per event on stdout under structured output.
+	render := func(e remote4.Event) { renderDebugEvent(out, e) }
+	if structured() {
+		stdout := cmd.OutOrStdout()
+		render = func(e remote4.Event) { writeJSON(stdout, debugEventOf(e)) }
+	}
 	ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -212,8 +220,8 @@ func runDebug(cmd *cobra.Command, o debugOptions) error {
 		MobDebug: o.mobdebug, Stderr: out,
 	})
 	if err != nil {
-		return clierr.Wrap(err, "couldn't start the local Lua runtime",
-			"install Lua 5.1 (brew install lua@5.1) or point --lua at an interpreter")
+		return clierr.WithCode(clierr.Wrap(err, "couldn't start the local Lua runtime",
+			"install Lua 5.1 (brew install lua@5.1) or point --lua at an interpreter"), codeRuntimeUnavailable)
 	}
 	defer func() { _ = rt.Shutdown(runtimeStopTimeout) }()
 	compiled, err := awaitCompiled(ctx, out, rt)
@@ -256,7 +264,7 @@ func runDebug(cmd *cobra.Command, o debugOptions) error {
 	go refreshStubToken(ctx, bridge, env.token)
 
 	ui.Fprintln(out, "\n"+ui.Success("Debug session active. Ctrl+C to stop.")+"\n")
-	err = renderDebugEvents(ctx, out, bridge, bridgeDone, handlers)
+	err = renderDebugEvents(ctx, out, render, bridge, bridgeDone, handlers)
 
 	// Teardown in order: tell the stub, stop the runtime, then disconnect.
 	endCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -276,8 +284,8 @@ func awaitCompiled(ctx context.Context, out io.Writer, rt *remote4.Runtime) (rem
 		case <-ctx.Done():
 			return remote4.Message{}, ctx.Err()
 		case <-timer.C:
-			return remote4.Message{}, clierr.User("the local runtime didn't start within 30s",
-				"re-run with --lua pointing at a Lua 5.1 interpreter")
+			return remote4.Message{}, clierr.WithCode(clierr.User("the local runtime didn't start within 30s",
+				"re-run with --lua pointing at a Lua 5.1 interpreter"), codeRuntimeUnavailable)
 		case m, ok := <-rt.Messages():
 			if !ok {
 				return remote4.Message{}, clierr.Wrap(errOrExit(rt.Err()), "the local runtime exited before loading the driver", "")
@@ -286,8 +294,8 @@ func awaitCompiled(ctx context.Context, out io.Writer, rt *remote4.Runtime) (rem
 			case "compiled":
 				return m, nil
 			case "fatal":
-				return remote4.Message{}, clierr.UserT("Driver failed to compile", m.Error,
-					"fix the error and run `driverforge debug` again")
+				return remote4.Message{}, clierr.WithCode(clierr.UserT("Driver failed to compile", m.Error,
+					"fix the error and run `driverforge debug` again"), codeBuildFailed)
 			case "print", "raw":
 				ui.Fprintln(out, "  | "+m.Text)
 			}
@@ -329,7 +337,7 @@ func refreshStubToken(ctx context.Context, bridge *remote4.Bridge, current strin
 	}
 }
 
-func renderDebugEvents(ctx context.Context, out io.Writer, bridge *remote4.Bridge, bridgeDone <-chan error, stubHandlers []string) error {
+func renderDebugEvents(ctx context.Context, out io.Writer, render func(remote4.Event), bridge *remote4.Bridge, bridgeDone <-chan error, stubHandlers []string) error {
 	loadSent := false
 	for {
 		select {
@@ -344,7 +352,7 @@ func renderDebugEvents(ctx context.Context, out io.Writer, bridge *remote4.Bridg
 			if !ok {
 				continue
 			}
-			renderDebugEvent(out, e)
+			render(e)
 			if err := onDebugEvent(out, bridge, e, stubHandlers, &loadSent); err != nil {
 				return err
 			}
@@ -471,4 +479,59 @@ func errOrExit(err error) error {
 		return errors.New("exited")
 	}
 	return err
+}
+
+// debugEventKinds names each event kind in structured output.
+var debugEventKinds = map[remote4.EventKind]string{
+	remote4.EventCompiled:       "compiled",
+	remote4.EventReady:          "ready",
+	remote4.EventCallback:       "callback",
+	remote4.EventCallbackResult: "callback_result",
+	remote4.EventC4Call:         "c4_call",
+	remote4.EventC4Result:       "c4_result",
+	remote4.EventPrint:          "print",
+	remote4.EventRuntimeLog:     "runtime_log",
+	remote4.EventReloaded:       "reloaded",
+	remote4.EventFatal:          "fatal",
+	remote4.EventStubOnline:     "stub_online",
+	remote4.EventStubOffline:    "stub_offline",
+	remote4.EventStubLog:        "stub_log",
+	remote4.EventRuntimeExited:  "runtime_exited",
+}
+
+// debugEventOut is one debug session event in structured output. Unlike the
+// text view it reports every event, verbose or not; fields an event doesn't
+// carry are left out.
+type debugEventOut struct {
+	Event    string          `json:"event"`
+	Summary  string          `json:"summary,omitempty"`
+	Name     string          `json:"name,omitempty"`
+	Method   string          `json:"method,omitempty"`
+	Args     json.RawMessage `json:"args,omitempty"`
+	Results  json.RawMessage `json:"results,omitempty"`
+	OK       *bool           `json:"ok,omitempty"`
+	Handled  *bool           `json:"handled,omitempty"`
+	Level    string          `json:"level,omitempty"`
+	Text     string          `json:"text,omitempty"`
+	Error    string          `json:"error,omitempty"`
+	Handlers []string        `json:"handlers,omitempty"`
+	Driver   string          `json:"driver,omitempty"`
+}
+
+func debugEventOf(e remote4.Event) debugEventOut {
+	m := e.Message
+	o := debugEventOut{
+		Event: firstNonEmpty(debugEventKinds[e.Kind], "unknown"),
+		Name:  m.Name, Method: m.Method, Args: m.Args, Results: m.Results,
+		OK: m.OK, Handled: m.Handled, Level: m.Level, Text: m.Text, Error: m.Error,
+		Handlers: m.Handlers, Driver: m.Driver,
+	}
+	switch e.Kind {
+	case remote4.EventCallback, remote4.EventC4Call:
+		o.Summary = m.Summary()
+	}
+	if o.Error == "" && e.Err != nil {
+		o.Error = e.Err.Error()
+	}
+	return o
 }

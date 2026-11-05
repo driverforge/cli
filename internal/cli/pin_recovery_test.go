@@ -262,12 +262,12 @@ func TestFramedDeployRecoversRotatedPin(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	progress := &recordedDeployProgress{rows: make(map[string]string)}
-	state, err := deployStreamInFrame(ctx, progress, cl, dev, "agent.c4z", "hash", strings.NewReader("driver"), true, "2026082201", "2026091101")
+	terminal, err := deployStreamInFrame(ctx, progress, cl, dev, "agent.c4z", "hash", strings.NewReader("driver"), true, "2026082201", "2026091101")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state != agent.StateConfirmed || progress.rows["version"] != "2026091101" || len(progress.warnings) != 0 {
-		t.Fatalf("framed deploy did not confirm: state=%s progress=%+v", state, progress)
+	if state := terminal.State; state != agent.StateConfirmed || progress.rows["version"] != "2026091101" || len(progress.warnings) != 0 {
+		t.Fatalf("framed deploy did not confirm: state=%s progress=%+v", terminal.State, progress)
 	}
 	if len(progress.steps) == 0 || len(progress.logs) == 0 {
 		t.Fatal("frame received no deploy progress")

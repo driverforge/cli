@@ -11,10 +11,8 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 
-	"github.com/driverforge/cli/internal/agentmode"
 	"github.com/driverforge/cli/internal/auth"
 	"github.com/driverforge/cli/internal/buildinfo"
-	"github.com/driverforge/cli/internal/clierr"
 	"github.com/driverforge/cli/internal/errreport"
 	"github.com/driverforge/cli/internal/metrics"
 	"github.com/driverforge/cli/internal/orgctx"
@@ -44,9 +42,17 @@ var (
 func Execute() (code int) {
 	defer func() {
 		if r := recover(); r != nil {
+			code = 1
+			if structured() {
+				e := &cmdErr{Code: codeInternal, Message: "The CLI crashed.",
+					Hint: "Try again; if it persists, contact support with the reference."}
+				e.Reference = errreport.ReportPanicQuietly(r, lastInvocation)
+				writeJSON(os.Stdout, map[string]any{"error": e})
+				writeJSON(os.Stderr, map[string]any{"error": e})
+				return
+			}
 			ui.RenderCrash(os.Stderr, fmt.Errorf("driverforge crashed: %v", r))
 			errreport.HandlePanic(r, lastInvocation, os.Stderr)
-			code = 2
 		}
 	}()
 	cmd, err := newRootCmd().ExecuteC()
@@ -55,6 +61,11 @@ func Execute() (code int) {
 		// make them friendly and pointed at the docs. cmd is the command cobra
 		// resolved, so the link lands on the right page.
 		err = friendlyUsage(cmd, err)
+		// Structured output reports every failure as an error document, and
+		// reports a bug quietly (with its reference) rather than offering to.
+		if structured() {
+			return writeFailure(os.Stdout, os.Stderr, err)
+		}
 		// An unexpected error (a bug) is reportable: apologise and offer Sentry.
 		// An expected condition is wrapped as a clierr.UserError: render it
 		// nicely and exit non-zero, but never report it.
@@ -64,16 +75,21 @@ func Execute() (code int) {
 			ui.RenderUserError(os.Stderr, err)
 		}
 		errreport.Handle(err, lastInvocation, os.Stderr)
-		return clierr.ExitCode(err)
+		return exitFor(err)
 	}
 	return 0
 }
 
 func newRootCmd() *cobra.Command {
 	root := &cobra.Command{
-		Use:           "driverforge",
-		Short:         "Driverforge CLI",
-		Long:          "driverforge builds and manages Control4 drivers.",
+		Use:   "driverforge",
+		Short: "Driverforge CLI",
+		Long: `driverforge builds and manages Control4 drivers.
+
+Under a coding agent, or with DRIVERFORGE_OUTPUT=json, every command writes one
+JSON document to stdout (its result, or {"error": …} with a stable code),
+progress as JSON lines on stderr, and never prompts. DRIVERFORGE_OUTPUT=text
+keeps text output.`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		// Version enables cobra's root --version flag. It prints and exits
@@ -93,10 +109,10 @@ func newRootCmd() *cobra.Command {
 			if isAuthOrMetaCmd(cmd) {
 				return // don't stack the consent prompt on meta/auth/org commands
 			}
-			// A coding agent can't answer the consent prompt; it keeps whatever
-			// the person chose (or the default) without asking.
+			// Structured output (a coding agent) can't answer the consent
+			// prompt; it keeps whatever the person chose (or the default).
 			cfg := metrics.Load()
-			if !agentmode.Enabled() {
+			if !structured() {
 				cfg = metrics.EnsureConsent()
 			}
 			metricsClient = metrics.New(cfg)
@@ -113,7 +129,7 @@ func newRootCmd() *cobra.Command {
 		// Runs only after a command succeeds (skipped on error). Prints a
 		// "newer version available" notice when appropriate.
 		PersistentPostRun: func(cmd *cobra.Command, _ []string) {
-			if flagNoUpdateCheck || agentmode.Enabled() || isAuthOrMetaCmd(cmd) || ownsTheUpdateStory(cmd) {
+			if flagNoUpdateCheck || structured() || isAuthOrMetaCmd(cmd) || ownsTheUpdateStory(cmd) {
 				return // don't nag on meta/auth/org commands
 			}
 			updatecheck.Notify(cmd.Context(), buildinfo.Version, os.Stderr)

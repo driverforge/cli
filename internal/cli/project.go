@@ -15,9 +15,9 @@ import (
 func requireProject(dir string) (project.Project, error) {
 	proj, err := project.Locate(dir)
 	if errors.Is(err, project.ErrNotFound) {
-		return project.Project{}, clierr.WrapT(err, "No project found",
+		return project.Project{}, clierr.WithCode(clierr.WrapT(err, "No project found",
 			"This doesn't look like a driver project.",
-			"run `driverforge init` to create one, or cd into an existing project")
+			"run `driverforge init` to create one, or cd into an existing project"), codeNotAProject)
 	}
 	if err != nil {
 		return project.Project{}, err
@@ -37,6 +37,7 @@ func requireInitialised(projectRoot string) (*driverforgeconfig.Config, error) {
 	}
 	if cfg == nil {
 		return nil, &clierr.UserError{
+			Code:    codeNotInitialised,
 			Title:   "Not set up for Driverforge",
 			Message: "this driver hasn't been initialised with Driverforge yet",
 			Hint:    "run `driverforge init` first",

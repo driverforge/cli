@@ -67,7 +67,7 @@ internal/telemetry/  live driver telemetry (Centrifugo websocket)
 internal/telemetryread/  reading telemetry back: entry contract, filters,
                      paging, wait/follow (logs, errors, events, get)
 internal/deployrecord/   what this machine last deployed (--version current)
-internal/agentmode/  detects a coding agent driving the CLI
+internal/agentmode/  detects a coding agent, and when output is structured
 internal/clierr/     UserError — expected, user-facing failures
 internal/errreport/  opt-in crash reporting
 pkg/c4z/             the build library: manifest, squish, driverxml,
@@ -84,6 +84,9 @@ Two conventions worth knowing before your first change (details in
   card, never crash-reported); anything else surfacing at the top is treated
   as a bug. Library packages prefix wrapped errors with a lowercase context
   tag.
+- **Structured output:** under a coding agent, or with `DRIVERFORGE_OUTPUT=json`,
+  every command writes one JSON document to stdout and never prompts — write
+  text through `textOut`, report results with `emit`.
 - **Output:** strings from controllers/APIs are sanitized of terminal escape
   sequences at ingestion (`internal/sanitize`) — keep remote data flowing
   through the existing decode paths.

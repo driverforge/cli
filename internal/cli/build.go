@@ -41,7 +41,7 @@ func newBuildCmd() *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if cmd.Flags().Changed("version") && strings.TrimSpace(versionFlag) == "" {
-				return clierr.User("--version needs a value", "e.g. --version 2026070501")
+				return clierr.WithCode(clierr.User("--version needs a value", "e.g. --version 2026070501"), codeUsage)
 			}
 			proj, err := requireProject(flagProjectDir)
 			if err != nil {
@@ -82,7 +82,7 @@ func newBuildCmd() *cobra.Command {
 			if outputDir != "" {
 				distDir = outputDir
 			}
-			_, err = executeBuild(cmd, c4z.Options{
+			res, err := executeBuild(cmd, c4z.Options{
 				Configuration:    configuration,
 				SrcDir:           proj.SrcDir,
 				DistDir:          distDir,
@@ -97,7 +97,10 @@ func newBuildCmd() *cobra.Command {
 				WarningsAsErrors: warningsAsErrors,
 				Now:              time.Now(),
 			}, configuration)
-			return err
+			if err != nil {
+				return err
+			}
+			return emit(cmd, buildOutOf(res, configuration), noText)
 		},
 	}
 	cmd.Flags().StringVarP(&configuration, "configuration", "c", "", "build configuration to apply (swaps in config.<configuration>.lua and suffixes the name; omit for a default build using config.lua)")
@@ -120,14 +123,14 @@ func newBuildCmd() *cobra.Command {
 // friendly errors. Used by the standalone build command; the ship commands
 // (sync/deploy) embed the build in their own frame via buildInFrame.
 func executeBuild(cmd *cobra.Command, opts c4z.Options, configuration string) (c4z.Result, error) {
-	out := cmd.OutOrStdout()
-	if ui.Interactive(flagNoTUI) {
+	out := textOut(cmd)
+	if ui.Interactive(flagNoTUI) || structured() {
 		var res c4z.Result
 		defer metricsClient.Flush(cmd.Context())
-		err := ui.RunFrame(cmd.Context(), ui.FrameOptions{
+		_, err := runFrame(cmd.Context(), out, ui.FrameOptions{
 			Step:        buildingLabel(configuration),
 			DetailsOpen: flagVerbose,
-		}, func(ctx context.Context, f *ui.Frame) error {
+		}, func(ctx context.Context, f ui.Progress) error {
 			var berr error
 			res, berr = buildInFrame(ctx, f, opts, configuration)
 			if berr != nil {
@@ -144,7 +147,7 @@ func executeBuild(cmd *cobra.Command, opts c4z.Options, configuration string) (c
 	emitBuildMetrics(configuration, res, err, time.Since(start))
 	defer metricsClient.Flush(cmd.Context())
 	if err != nil {
-		return res, clierr.AsFatal(buildErr(err))
+		return res, clierr.AsFatal(clierr.WithCode(buildErr(err), codeBuildFailed))
 	}
 	ui.PrintResultPlain(out, res)
 	return res, nil
@@ -167,7 +170,7 @@ func buildingLabel(configuration string) string {
 // cancelled, as before — a user cancel isn't a build failure); anticipated
 // failures map through buildErr and are marked fatal. Shared by build, deploy,
 // and sync, whose frames all start with a build.
-func buildInFrame(ctx context.Context, f *ui.Frame, opts c4z.Options, configuration string) (c4z.Result, error) {
+func buildInFrame(ctx context.Context, f ui.Progress, opts c4z.Options, configuration string) (c4z.Result, error) {
 	rec := newStepRecorder()
 	// rec.wrapProgress observes before forwarding, so rec.durs already carries
 	// the step's duration by the time the log line renders it.
@@ -209,7 +212,7 @@ func buildInFrame(ctx context.Context, f *ui.Frame, opts c4z.Options, configurat
 	}
 	emitBuildMetrics(configuration, res, err, time.Since(start))
 	if err != nil {
-		return res, clierr.AsFatal(buildErr(err))
+		return res, clierr.AsFatal(clierr.WithCode(buildErr(err), codeBuildFailed))
 	}
 	f.Row("driver", res.Name)
 	if res.Version != "" {
@@ -343,6 +346,7 @@ func nextProjectVersion(proj project.Project, cfg *driverforgeconfig.Config, wha
 	current, ok := driverxml.ReadVersion(data)
 	if !ok {
 		return "", &clierr.UserError{
+			Code:    codeVersioning,
 			Title:   "No <version> element",
 			Message: "driver.xml has no <version> element to bump",
 			Hint:    "add one, e.g. <version>1</version>",
@@ -350,7 +354,7 @@ func nextProjectVersion(proj project.Project, cfg *driverforgeconfig.Config, wha
 	}
 	next, err := versioning.Next(cfg.Versioning, current, time.Now())
 	if err != nil {
-		return "", clierr.Wrap(err, err.Error(), "fix the <version> value in driver.xml, or re-run `driverforge init` to change the versioning scheme")
+		return "", clierr.WithCode(clierr.Wrap(err, err.Error(), "fix the <version> value in driver.xml, or re-run `driverforge init` to change the versioning scheme"), codeVersioning)
 	}
 	return next, nil
 }
@@ -359,6 +363,7 @@ func nextProjectVersion(proj project.Project, cfg *driverforgeconfig.Config, wha
 // operation on a project without a versioning scheme.
 func versioningNotConfiguredErr(what string) *clierr.UserError {
 	return &clierr.UserError{
+		Code:    codeVersioning,
 		Title:   "Versioning not configured",
 		Message: fmt.Sprintf("%s needs to know how this driver is versioned", what),
 		Hint:    "run `driverforge init` to choose a versioning scheme",
@@ -404,4 +409,30 @@ func buildErr(err error) error {
 		return clierr.Wrap(err, err.Error(), "check the top-level <name> element in driver.xml, or omit --configuration")
 	}
 	return err
+}
+
+// buildOut is a finished build in structured output: what build reports, and
+// what deploy and sync report about the build they shipped.
+type buildOut struct {
+	Driver        string    `json:"driver"`
+	Configuration string    `json:"configuration"`
+	Version       *string   `json:"version"`
+	Artifact      string    `json:"artifact"`
+	Encrypted     bool      `json:"encrypted"`
+	Unpacked      *string   `json:"unpacked"`
+	Sourcemap     *string   `json:"sourcemap"`
+	Warnings      []warning `json:"warnings"`
+}
+
+func buildOutOf(res c4z.Result, configuration string) buildOut {
+	o := buildOut{
+		Driver: res.Name, Configuration: firstNonEmpty(configuration, "default"),
+		Version: optional(res.Version), Artifact: res.C4zPath, Encrypted: res.Encrypted,
+		Unpacked: optional(res.UnpackedDir), Sourcemap: optional(res.SourceMapPath),
+		Warnings: []warning{},
+	}
+	for _, w := range res.Warnings {
+		o.Warnings = append(o.Warnings, warning{Code: codeBuildWarning, Message: w})
+	}
+	return o
 }

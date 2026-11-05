@@ -46,7 +46,7 @@ func deployFailErr(terminal agent.DeployEvent) error {
 	if terminal.ReportURL != "" {
 		hint = "see " + terminal.ReportURL
 	}
-	return clierr.UserT("Deploy failed", msg, hint)
+	return clierr.WithCode(clierr.UserT("Deploy failed", msg, hint), codeDeployFailed)
 }
 
 // friendlyDeployErr maps a deploy failure to a friendly error. A timeout and an
@@ -58,9 +58,9 @@ func friendlyDeployErr(dev orgctx.Device, err error) error {
 		return nil
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
-		return clierr.WrapT(err, "Deploy timed out",
+		return clierr.WithCode(clierr.WrapT(err, "Deploy timed out",
 			fmt.Sprintf("Deploy to %s timed out — the controller didn't finish in time.", dev.Name),
-			"Check the controller and try again — see "+agentDocsURL)
+			"Check the controller and try again — see "+agentDocsURL), codeDeployTimedOut)
 	}
 	// The agent answered with a reason (a structured error). Whatever it is, the
 	// CLI did its job — surface the agent's message, don't crash/report.
@@ -71,11 +71,11 @@ func friendlyDeployErr(dev orgctx.Device, err error) error {
 		// capability), guide the user to add it once in Composer Pro — a clean,
 		// CLI-owned message rather than the agent's raw wording.
 		if ae.Code == agent.CodeNotInProject {
-			return clierr.WrapT(err, "Set up in Composer Pro first",
+			return clierr.WithCode(clierr.WrapT(err, "Set up in Composer Pro first",
 				fmt.Sprintf("The driver isn't part of the project on %s yet, so it can't be deployed.", dev.Name),
-				"Add it to a room once in Composer Pro, then run `driverforge deploy` again.")
+				"Add it to a room once in Composer Pro, then run `driverforge deploy` again."), codeNotInProject)
 		}
-		return clierr.WrapT(err, "Deploy failed", capitalise(ae.Error()), "")
+		return clierr.WithCode(clierr.WrapT(err, "Deploy failed", capitalise(ae.Error()), ""), codeDeployFailed)
 	}
 	return fmt.Errorf("deploy: %w", err)
 }
@@ -105,27 +105,27 @@ func agentUnreachableErr(dev orgctx.Device, cause error) error {
 	// the agent's internals dates the moment those internals change.
 	switch {
 	case isConnRefused(cause):
-		return clierr.WrapT(cause, "Agent not accepting connections",
+		return clierr.WithCode(clierr.WrapT(cause, "Agent not accepting connections",
 			fmt.Sprintf("%s answered, but nothing is listening on the deploy port.", where),
-			"In Composer, open the Anvil Agent driver and run its \"Restart Deploy Server\" action — see "+agentDocsURL)
+			"In Composer, open the Anvil Agent driver and run its \"Restart Deploy Server\" action — see "+agentDocsURL), codeAgentUnreachable)
 
 	case isTimeout(cause):
-		return clierr.WrapT(cause, "Controller not responding",
+		return clierr.WithCode(clierr.WrapT(cause, "Controller not responding",
 			fmt.Sprintf("No response from %s.", where),
 			"Check the controller is powered on and reachable from this machine — a VLAN or firewall "+
 				"between you and it will block the deploy port. If its address has changed, re-run "+
-				"`driverforge device select` — see "+agentDocsURL)
+				"`driverforge device select` — see "+agentDocsURL), codeAgentUnreachable)
 
 	case isDNSError(cause):
-		return clierr.WrapT(cause, "Controller address won't resolve",
+		return clierr.WithCode(clierr.WrapT(cause, "Controller address won't resolve",
 			fmt.Sprintf("Couldn't resolve an address for %s.", where),
 			"A Control4 hostname isn't a DNS name, so the controller's IP is what deploy uses. "+
-				"Re-run `driverforge device select` to refresh it — see "+agentDocsURL)
+				"Re-run `driverforge device select` to refresh it — see "+agentDocsURL), codeAgentUnreachable)
 	}
 
-	return clierr.WrapT(cause, "Agent unreachable",
+	return clierr.WithCode(clierr.WrapT(cause, "Agent unreachable",
 		fmt.Sprintf("Couldn't reach the Anvil Agent on %s.", where),
-		"Check the Anvil Agent is installed and running on the controller — see "+agentDocsURL)
+		"Check the Anvil Agent is installed and running on the controller — see "+agentDocsURL), codeAgentUnreachable)
 }
 
 // isConnRefused reports a TCP refusal: the host is up and answered, but nothing
@@ -161,5 +161,5 @@ func agentMissingCapabilityErr(dev orgctx.Device, capability, version string) er
 	if version != "" {
 		msg = fmt.Sprintf("The Anvil Agent on %s (%s) doesn't support %s.", dev.Name, version, capability)
 	}
-	return clierr.UserT("Agent out of date", msg, "Update the Anvil Agent on the controller — see "+agentDocsURL)
+	return clierr.WithCode(clierr.UserT("Agent out of date", msg, "Update the Anvil Agent on the controller — see "+agentDocsURL), codeAgentOutOfDate)
 }

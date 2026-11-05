@@ -15,6 +15,7 @@ import (
 	"github.com/driverforge/cli/internal/deploycache"
 	"github.com/driverforge/cli/internal/orgctx"
 	"github.com/driverforge/cli/internal/ui"
+	"github.com/driverforge/cli/pkg/c4z"
 )
 
 // newSyncCmd hot-swaps a driver's Lua into the running driver on a controller —
@@ -39,7 +40,7 @@ func newSyncCmd() *cobra.Command {
 			"idempotent; and a Composer edit isn't detected (deploy is the fix).",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if ui.Interactive(flagNoTUI) {
+			if ui.Interactive(flagNoTUI) || structured() {
 				return runSyncFramed(cmd, configuration, deviceFlag, selectFlag, deployFlag, refreshFlag)
 			}
 			// A full deploy (asked for, or escalated into) rebuilds with the
@@ -90,26 +91,9 @@ func runSync(ctx context.Context, out io.Writer, c4zPath, artifact, pref string,
 		return err
 	}
 
-	// The heading titles the whole operation and sits above the resolve/connect
-	// steps that follow — mirroring runDeploy. Lead with the remembered
-	// controller when we have one; otherwise print it once the picker decides.
-	action := "Syncing " + artifact + " to"
-	heading := ""
-	if pref == "" && !forceSelect {
-		if cur, cerr := orgctx.CurrentDevice(); cerr == nil {
-			heading = cur.Name
-		}
-	}
-	if heading != "" {
-		ui.Fprintln(out, "\n"+ui.DeployHeading(action, heading))
-	}
-
-	dev, err := resolveSyncDevice(ctx, out, pref, forceSelect)
+	dev, headed, err := headedTarget(ctx, out, "Syncing "+artifact+" to", pref, forceSelect, resolveSyncDevice)
 	if err != nil {
 		return err
-	}
-	if heading == "" {
-		ui.Fprintln(out, "\n"+ui.DeployHeading(action, dev.Name))
 	}
 
 	// Connecting resolves the pinned fingerprint and runs a health check — a
@@ -117,7 +101,7 @@ func runSync(ctx context.Context, out io.Writer, c4zPath, artifact, pref string,
 	// to ✓/✗. When the remembered-controller fast path skipped the discovery
 	// step, this is the first step under the heading and takes the leading blank.
 	connect := ui.WaitFor
-	if heading == "" {
+	if !headed {
 		connect = ui.WaitForStep // the discovery spinner already provided the gap
 	}
 	var (
@@ -144,20 +128,8 @@ func runSync(ctx context.Context, out io.Writer, c4zPath, artifact, pref string,
 		return deployFn()
 	}
 
-	// Decide using the local baseline (fast); fall back to the agent's
-	// driver-state probe on a cache miss.
-	baseline := deploycache.Get(dev.ID, filename)
-	if baseline == "" {
-		if st, sErr := cl.DriverState(ctx, filename); sErr == nil && st.StructuralHash != "" {
-			baseline = st.StructuralHash
-			_ = deploycache.Set(dev.ID, filename, baseline)
-		}
-	}
-	switch {
-	case baseline == "":
-		return escalate(out, "no verified baseline yet for this driver", deployFn)
-	case baseline != hash:
-		return escalate(out, "driver.xml changed (actions, properties, etc.)", deployFn)
+	if why := structuralChange(ctx, cl, dev, filename, hash); why != "" {
+		return escalate(out, why, deployFn)
 	}
 
 	// Structurally unchanged → hot-swap, behind a spinner that resolves.
@@ -202,20 +174,26 @@ func runSync(ctx context.Context, out io.Writer, c4zPath, artifact, pref string,
 // escalation, or straight away when a hot-swap was never possible (encrypted
 // build, agent without the capability), mirroring the plain path.
 func runSyncFramed(cmd *cobra.Command, configuration, pref string, forceSelect, deployFlag, forceRefresh bool) error {
-	ctx := cmd.Context()
-	out := cmd.OutOrStdout()
-	defer metricsClient.Flush(ctx)
+	defer metricsClient.Flush(cmd.Context())
+	shipped, err := syncFramed(cmd.Context(), textOut(cmd), configuration, pref, forceSelect, deployFlag, forceRefresh)
+	if err != nil {
+		return err
+	}
+	return emit(cmd, shipped, noText)
+}
 
+// syncFramed is runSyncFramed's work, returning what reached the controller.
+func syncFramed(ctx context.Context, out io.Writer, configuration, pref string, forceSelect, deployFlag, forceRefresh bool) (shipOut, error) {
 	// --deploy is a full deploy in sync clothing — resolve (and revalidate) the
 	// device exactly as deploy does.
 	if deployFlag {
 		opts, err := deployBuildOptions(configuration)
 		if err != nil {
-			return err
+			return shipOut{}, err
 		}
 		target, resolve, err := frameDeviceResolution(ctx, out, pref, forceSelect)
 		if err != nil {
-			return err
+			return shipOut{}, err
 		}
 		return deployFramedTo(ctx, out, opts, configuration, target, resolve, forceRefresh)
 	}
@@ -236,137 +214,167 @@ func runSyncFramed(cmd *cobra.Command, configuration, pref string, forceSelect, 
 		var rerr error
 		target, resolve, rerr = frameDeviceResolution(ctx, out, pref, forceSelect)
 		if rerr != nil {
-			return rerr
+			return shipOut{}, rerr
 		}
 	}
 
 	opts, err := shipBuildOptions(configuration)
 	if err != nil {
-		return err
+		return shipOut{}, err
 	}
-
-	var (
-		dev            orgctx.Device
-		fallbackReason string // hot-swap impossible → deploy without asking
-		escalateReason string // structural change → confirm, then deploy
-	)
-	// fullDeployRequired resolves the frame amber: the sync didn't fail, it
-	// just can't hot-swap — the follow-up deploy runs as its own frame.
-	fullDeployRequired := func(f *ui.Frame, reason string) {
-		f.Warnf("%s", reason)
-		f.Step("Full deploy required")
-	}
-	err = ui.RunFrame(ctx, ui.FrameOptions{
+	hs := &hotSwap{configuration: configuration, opts: opts, resolve: resolve, shipped: shipOut{Action: "sync"}}
+	warnings, err := runFrame(ctx, out, ui.FrameOptions{
 		Step:        "Syncing to " + target + "…",
 		DetailsOpen: flagVerbose,
-	}, func(ctx context.Context, f *ui.Frame) error {
-		res, err := buildInFrame(ctx, f, opts, configuration)
-		if err != nil {
-			return err
-		}
-		filename := res.ArtifactName + ".c4z"
-
-		// Resolve the device before the hot-swap decisions, so every fallback
-		// and escalation below already knows the deploy target.
-		dev, err = resolve(ctx, f)
-		if err != nil {
-			return err
-		}
-
-		// Hot-swap ships the plaintext squished Lua; encrypted builds can't (the
-		// director can't run ciphertext as LUA_COMMANDS) → full deploy.
-		lua, err := readC4zEntry(res.C4zPath, "driver.lua")
-		if err != nil {
-			if _, encErr := readC4zEntry(res.C4zPath, "driver.lua.encrypted"); encErr == nil {
-				fallbackReason = "encrypted build — hot-swap isn't supported"
-				fullDeployRequired(f, fallbackReason)
-				return nil
-			}
-			return err
-		}
-		hash, err := structuralHashOfC4z(res.C4zPath)
-		if err != nil {
-			return err
-		}
-
-		f.Step("Connecting to " + dev.Name + "…")
-		cl, h, herr := dialAgent(ctx, dev)
-		if herr != nil {
-			return agentUnreachableErr(dev, herr)
-		}
-		f.Logf("✓ %s", connectedLabel(dev, h))
-		f.Row("controller", dev.Name)
-		// Capability gate. An unreachable agent is a real error; an agent that's
-		// reachable but can't hot-swap falls back to a full deploy.
-		if !h.Supports("sync") {
-			fallbackReason = "agent doesn't support hot-swap"
-			fullDeployRequired(f, fallbackReason)
-			return nil
-		}
-
-		// Decide using the local baseline (fast); fall back to the agent's
-		// driver-state probe on a cache miss.
-		baseline := deploycache.Get(dev.ID, filename)
-		if baseline == "" {
-			if st, sErr := cl.DriverState(ctx, filename); sErr == nil && st.StructuralHash != "" {
-				baseline = st.StructuralHash
-				_ = deploycache.Set(dev.ID, filename, baseline)
-			}
-		}
-		switch {
-		case baseline == "":
-			escalateReason = "no verified baseline yet for this driver"
-		case baseline != hash:
-			escalateReason = "driver.xml changed (actions, properties, etc.)"
-		}
-		if escalateReason != "" {
-			fullDeployRequired(f, escalateReason)
-			return nil
-		}
-
-		f.Step("Hot-swapping the driver's Lua…")
-		sres, serr := cl.Sync(ctx, filename, hash, "", bytes.NewReader(lua))
-		if serr != nil {
-			// A structural mismatch the agent caught is a fallback, not a failure.
-			if agent.Code(serr) == agent.CodeNeedsDeploy {
-				escalateReason = "driver.xml changed since the running build"
-				fullDeployRequired(f, escalateReason)
-				return nil
-			}
-			return friendlySyncErr(dev, filename, serr)
-		}
-		_ = deploycache.Set(dev.ID, filename, firstNonEmpty(sres.StructuralHash, hash))
-		f.Logf("✓ %s", syncedLabel(sres.Synced))
-
-		// An unverified swap still succeeded, so it warns (amber frame) rather
-		// than failing — the same shape the deploy path uses.
-		if !sres.Verified {
-			f.Warnf("couldn't verify against a prior deploy — if you've edited driver.xml, run `driverforge deploy`")
-		}
-		if len(sres.Devices) > 0 {
-			f.Row("devices", strings.Join(sres.Devices, ", "))
-		}
-		f.Step("Sync complete")
-		return nil
-	})
+	}, hs.run)
+	shipped, dev, fallbackReason, escalateReason := hs.shipped, hs.dev, hs.fallbackReason, hs.escalateReason
+	shipped.Warnings = nonNilWarnings(warnings)
 	if err != nil {
-		return err
+		return shipped, err
 	}
 	// The framed full deploy reuses the device sync already resolved, so the
 	// escalation never re-runs discovery or the picker.
-	deployTo := func() error {
+	deployTo := func(reason string) (shipOut, error) {
 		dopts, derr := deployBuildOptions(configuration)
 		if derr != nil {
-			return derr
+			return shipOut{}, derr
 		}
-		return deployFramedTo(ctx, out, dopts, configuration, dev.Name, resolvedDevice(dev), forceRefresh)
+		deployed, derr := deployFramedTo(ctx, out, dopts, configuration, dev.Name, resolvedDevice(dev), forceRefresh)
+		// The writer collects warnings across both frames, so the deploy's
+		// already include the sync's.
+		deployed.Reason = optional(reason)
+		return deployed, derr
 	}
 	switch {
 	case fallbackReason != "":
-		return deployTo()
+		return deployTo(fallbackReason)
 	case escalateReason != "":
-		return escalate(out, escalateReason, deployTo)
+		var deployed shipOut
+		err := escalate(out, escalateReason, func() error {
+			var derr error
+			deployed, derr = deployTo(escalateReason)
+			return derr
+		})
+		return deployed, err
 	}
+	return shipped, nil
+}
+
+// hotSwap is a sync's work under its run frame: build, resolve the device,
+// and hot-swap the Lua — or say why a full deploy is needed instead.
+type hotSwap struct {
+	configuration string
+	opts          c4z.Options
+	resolve       deviceResolver
+
+	shipped        shipOut
+	dev            orgctx.Device
+	fallbackReason string // hot-swap impossible → deploy without asking
+	escalateReason string // structural change → confirm, then deploy
+}
+
+// needsDeploy resolves the frame amber: the sync didn't fail, it just can't
+// hot-swap — the follow-up deploy runs as its own frame.
+func needsDeploy(f ui.Progress, reason *string, why string) error {
+	*reason = why
+	f.Warnf("%s", why)
+	f.Step("Full deploy required")
+	return nil
+}
+
+func (hs *hotSwap) run(ctx context.Context, f ui.Progress) error {
+	res, err := buildInFrame(ctx, f, hs.opts, hs.configuration)
+	if err != nil {
+		return err
+	}
+	hs.shipped.Build = buildOutOf(res, hs.configuration)
+	filename := res.ArtifactName + ".c4z"
+
+	// Resolve the device before the hot-swap decisions, so every fallback and
+	// escalation below already knows the deploy target.
+	if hs.dev, err = hs.resolve(ctx, f); err != nil {
+		return err
+	}
+
+	// Hot-swap ships the plaintext squished Lua; encrypted builds can't (the
+	// director can't run ciphertext as LUA_COMMANDS) → full deploy.
+	lua, err := readC4zEntry(res.C4zPath, "driver.lua")
+	if err != nil {
+		if _, encErr := readC4zEntry(res.C4zPath, "driver.lua.encrypted"); encErr == nil {
+			return needsDeploy(f, &hs.fallbackReason, "encrypted build — hot-swap isn't supported")
+		}
+		return err
+	}
+	hash, err := structuralHashOfC4z(res.C4zPath)
+	if err != nil {
+		return err
+	}
+
+	f.Step("Connecting to " + hs.dev.Name + "…")
+	cl, h, herr := dialAgent(ctx, hs.dev)
+	if herr != nil {
+		return agentUnreachableErr(hs.dev, herr)
+	}
+	f.Logf("✓ %s", connectedLabel(hs.dev, h))
+	f.Row("controller", hs.dev.Name)
+	hs.shipped.Device = deviceRefOf(hs.dev, h)
+	// Capability gate. An unreachable agent is a real error; an agent that's
+	// reachable but can't hot-swap falls back to a full deploy.
+	if !h.Supports("sync") {
+		return needsDeploy(f, &hs.fallbackReason, "agent doesn't support hot-swap")
+	}
+	if why := structuralChange(ctx, cl, hs.dev, filename, hash); why != "" {
+		return needsDeploy(f, &hs.escalateReason, why)
+	}
+	return hs.swap(ctx, f, cl, filename, hash, lua)
+}
+
+// structuralChange says why the running driver can't take a hot-swap of a
+// build with this structural hash, or "" when it can. It decides from the
+// local baseline (fast), falling back to the agent's driver-state probe on a
+// cache miss.
+func structuralChange(ctx context.Context, cl *agent.Client, dev orgctx.Device, filename, hash string) string {
+	baseline := deploycache.Get(dev.ID, filename)
+	if baseline == "" {
+		if st, sErr := cl.DriverState(ctx, filename); sErr == nil && st.StructuralHash != "" {
+			baseline = st.StructuralHash
+			_ = deploycache.Set(dev.ID, filename, baseline)
+		}
+	}
+	switch {
+	case baseline == "":
+		return "no verified baseline yet for this driver"
+	case baseline != hash:
+		return "driver.xml changed (actions, properties, etc.)"
+	}
+	return ""
+}
+
+// swap hot-swaps the driver's Lua on a structurally unchanged driver.
+func (hs *hotSwap) swap(ctx context.Context, f ui.Progress, cl *agent.Client, filename, hash string, lua []byte) error {
+	f.Step("Hot-swapping the driver's Lua…")
+	sres, serr := cl.Sync(ctx, filename, hash, "", bytes.NewReader(lua))
+	if serr != nil {
+		// A structural mismatch the agent caught is a fallback, not a failure.
+		if agent.Code(serr) == agent.CodeNeedsDeploy {
+			return needsDeploy(f, &hs.escalateReason, "driver.xml changed since the running build")
+		}
+		return friendlySyncErr(hs.dev, filename, serr)
+	}
+	_ = deploycache.Set(hs.dev.ID, filename, firstNonEmpty(sres.StructuralHash, hash))
+	f.Logf("✓ %s", syncedLabel(sres.Synced))
+	hs.shipped.State, hs.shipped.Version, hs.shipped.Verified = "synced", hs.shipped.Build.Version, &sres.Verified
+	hs.shipped.Instances = append([]string{}, sres.Devices...)
+
+	// An unverified swap still succeeded, so it warns (amber frame) rather than
+	// failing — the same shape the deploy path uses.
+	if !sres.Verified {
+		f.Warnf("couldn't verify against a prior deploy — if you've edited driver.xml, run `driverforge deploy`")
+	}
+	if len(sres.Devices) > 0 {
+		f.Row("devices", strings.Join(sres.Devices, ", "))
+	}
+	f.Step("Sync complete")
 	return nil
 }
 
@@ -391,15 +399,15 @@ func friendlySyncErr(dev orgctx.Device, filename string, err error) error {
 	}
 	switch agent.Code(err) {
 	case agent.CodeNotInstalled:
-		return clierr.WrapT(err, "Driver not installed",
+		return clierr.WithCode(clierr.WrapT(err, "Driver not installed",
 			fmt.Sprintf("%s isn't installed on %s", filename, dev.Name),
-			"deploy it once in Composer Pro first")
+			"deploy it once in Composer Pro first"), codeNotInProject)
 	case agent.CodeSelfSyncForbidden:
-		return clierr.WrapT(err, "Can't sync the agent", "the agent's own driver can't be hot-swapped", "use `driverforge deploy`")
+		return clierr.WithCode(clierr.WrapT(err, "Can't sync the agent", "the agent's own driver can't be hot-swapped", "use `driverforge deploy`"), codeDeployRequired)
 	}
 	var ae *agent.Error
 	if errors.As(err, &ae) {
-		return clierr.WrapT(err, "Sync failed", capitalise(ae.Error()), "")
+		return clierr.WithCode(clierr.WrapT(err, "Sync failed", capitalise(ae.Error()), ""), codeSyncFailed)
 	}
 	return fmt.Errorf("sync: %w", err)
 }
@@ -431,5 +439,5 @@ func escalate(out io.Writer, reason string, deployFn func() error) error {
 		}
 		return deployFn()
 	}
-	return clierr.User(reason, "run `driverforge deploy` (or `driverforge sync --deploy`)")
+	return clierr.WithCode(clierr.User(reason, "run `driverforge deploy` (or `driverforge sync --deploy`)"), codeDeployRequired)
 }

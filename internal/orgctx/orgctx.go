@@ -8,12 +8,11 @@
 package orgctx
 
 import (
-	"encoding/json"
 	"errors"
 	"os"
-	"path/filepath"
 
 	"github.com/driverforge/cli/internal/clierr"
+	"github.com/driverforge/cli/internal/userconfig"
 )
 
 const schemaVersion = 1
@@ -22,6 +21,7 @@ const schemaVersion = 1
 // clierr.UserError so it renders as a friendly card (never reported to Sentry);
 // callers still match it with errors.Is.
 var ErrNoOrg = &clierr.UserError{
+	Code:    clierr.CodeOrgNotSelected,
 	Title:   "No organization selected",
 	Message: "no organization is selected",
 	Hint:    "run `driverforge org select`",
@@ -30,6 +30,7 @@ var ErrNoOrg = &clierr.UserError{
 // ErrNoDevice is returned by CurrentDevice when no device is selected for the
 // current organization. Like ErrNoOrg, it is a friendly clierr.UserError.
 var ErrNoDevice = &clierr.UserError{
+	Code:    clierr.CodeDeviceNotSelected,
 	Title:   "No device selected",
 	Message: "no device is selected",
 	Hint:    "run `driverforge device select`",
@@ -64,46 +65,18 @@ type Context struct {
 	CurrentDevice *Device `json:"currentDevice,omitempty"`
 }
 
-func contextPath() string {
-	dir, err := os.UserConfigDir()
-	if err != nil {
-		return ""
-	}
-	return filepath.Join(dir, "driverforge", "context.json")
-}
+// contextFile is the context's name in the user's driverforge config directory.
+const contextFile = "context.json"
+
+func contextPath() string { return userconfig.Path(contextFile) }
 
 // Load reads the context, returning a zero value if missing or unreadable.
-func Load() Context {
-	path := contextPath()
-	if path == "" {
-		return Context{}
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return Context{}
-	}
-	var c Context
-	if err := json.Unmarshal(data, &c); err != nil {
-		return Context{}
-	}
-	return c
-}
+func Load() Context { return userconfig.Load[Context](contextFile) }
 
 // Save writes the context to disk (0600).
 func Save(c Context) error {
-	path := contextPath()
-	if path == "" {
-		return nil
-	}
 	c.SchemaVersion = schemaVersion
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	data, err := json.MarshalIndent(c, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(path, data, 0o600)
+	return userconfig.Save(contextFile, c)
 }
 
 // Clear removes the saved org/device context, e.g. on logout. It is idempotent:

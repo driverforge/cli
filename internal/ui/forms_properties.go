@@ -94,6 +94,9 @@ func PropertiesForm(driverName string, props []driverxml.Property) (map[string]s
 		if driverName != "" {
 			title = driverName + " — properties"
 		}
+		if err := checkPrompt(title); err != nil {
+			return nil, err
+		}
 		form := huh.NewForm(huh.NewGroup(fields...).Title(title)).WithTheme(formTheme()).WithWidth(formWidth())
 		if err := form.Run(); err != nil {
 			return nil, ExpectedIfAborted(err)

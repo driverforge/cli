@@ -47,6 +47,7 @@ type driverPlan struct {
 func initPreflight(ctx context.Context, out io.Writer, projectDir string) (proj project.Project, done bool, err error) {
 	if !ui.Interactive(flagNoTUI) {
 		return project.Project{}, false, &clierr.UserError{
+			Code:    codeInteractiveRequired,
 			Title:   "Interactive terminal required",
 			Message: "driverforge init walks you through linking a project and approving changes",
 			Hint:    "run it in an interactive terminal",

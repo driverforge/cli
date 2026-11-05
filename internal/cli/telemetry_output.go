@@ -35,15 +35,17 @@ type warning struct {
 // scopeOut is the scope a response actually used, echoed in every response so
 // a wrong context can't be read silently.
 type scopeOut struct {
-	Org     string     `json:"org"`
-	Project string     `json:"project"`
-	Device  *deviceOut `json:"device"`
-	Version *string    `json:"version"`
-	Since   *string    `json:"since"`
-	Until   *string    `json:"until"`
+	Org     string          `json:"org"`
+	Project string          `json:"project"`
+	Device  *scopeDeviceOut `json:"device"`
+	Version *string         `json:"version"`
+	Since   *string         `json:"since"`
+	Until   *string         `json:"until"`
 }
 
-type deviceOut struct {
+// scopeDeviceOut is the device a telemetry read was scoped to; its id is the
+// hardware id entries carry.
+type scopeDeviceOut struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
 }
@@ -88,7 +90,7 @@ func (s *telemetryScope) out(since, until time.Time) scopeOut {
 		Since:   timeOut(since), Until: timeOut(until),
 	}
 	if s.device != nil {
-		o.Device = &deviceOut{ID: s.device.mac, Name: s.device.name}
+		o.Device = &scopeDeviceOut{ID: s.device.mac, Name: s.device.name}
 	}
 	return o
 }

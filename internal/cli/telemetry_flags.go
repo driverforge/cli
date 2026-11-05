@@ -13,7 +13,6 @@ import (
 
 	"golang.org/x/term"
 
-	"github.com/driverforge/cli/internal/agentmode"
 	"github.com/driverforge/cli/internal/telemetryread"
 )
 
@@ -32,7 +31,7 @@ func outputFormat(flag string, follow bool, stdout io.Writer) (string, error) {
 	default:
 		return "", newCmdErr(codeUsage, "--output must be text, json or jsonl.", "Pass -o text, -o json or -o jsonl.").with("output", flag)
 	}
-	if !agentmode.Enabled() && isTerminal(stdout) {
+	if !structured() && isTerminal(stdout) {
 		return formatText, nil
 	}
 	if follow {

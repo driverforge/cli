@@ -9,7 +9,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/driverforge/cli/internal/agentmode"
 	"github.com/driverforge/cli/internal/driverforgeapi"
 	"github.com/driverforge/cli/internal/telemetryread"
 )
@@ -49,7 +48,7 @@ var (
 
 func runGet(cmd *cobra.Command, id string, sf scopeFlags, kind, output string, maxPayload int) error {
 	stdout := cmd.OutOrStdout()
-	diag := diagnostics{w: cmd.ErrOrStderr(), json: agentmode.Enabled()}
+	diag := diagnostics{w: cmd.ErrOrStderr(), json: structured()}
 	format, err := getFormat(output, stdout)
 	if err == nil {
 		err = validateGet(id, kind, maxPayload)

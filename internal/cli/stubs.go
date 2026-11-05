@@ -15,6 +15,7 @@ func newPublishCmd() *cobra.Command {
 		Hidden: true,
 		RunE: func(*cobra.Command, []string) error {
 			return &clierr.UserError{
+				Code:    codeNotAvailable,
 				Title:   "Not available yet",
 				Message: "driverforge publish isn't available in this release",
 				Hint:    "it ships alongside the marketplace",

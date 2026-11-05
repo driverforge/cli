@@ -14,16 +14,21 @@
 package ui
 
 import (
+	"fmt"
 	"os"
 
 	"golang.org/x/term"
+
+	"github.com/driverforge/cli/internal/agentmode"
+	"github.com/driverforge/cli/internal/clierr"
 )
 
 // Interactive reports whether to drive the Bubble Tea TUI. It is false when
-// --no-tui is set, when running under CI, or when stdout is not a terminal
-// (piped/redirected), in which case callers should use the plain renderer.
+// --no-tui is set, under CI, when output is structured (a coding agent, or
+// DRIVERFORGE_OUTPUT=json), or when stdout is not a terminal (piped or
+// redirected), in which case callers should use the plain renderer.
 func Interactive(noTUI bool) bool {
-	if noTUI {
+	if noTUI || agentmode.Structured() {
 		return false
 	}
 	if os.Getenv("CI") != "" {
@@ -108,4 +113,16 @@ func terminalWidth() (int, bool) {
 		}
 	}
 	return 0, false
+}
+
+// checkPrompt refuses a prompt when output is structured: nobody is at a
+// terminal to answer it, and a form would corrupt the output. The error names
+// the question, so the caller can see which answer to pass as a flag.
+func checkPrompt(title string) error {
+	if !agentmode.Structured() {
+		return nil
+	}
+	return clierr.WithCode(clierr.UserT("Input required",
+		fmt.Sprintf("%q needs an answer, and prompts are off for structured output", title),
+		"pass the answer as a flag or argument (see --help)"), clierr.CodeInputRequired)
 }

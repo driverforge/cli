@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/driverforge/cli/internal/auth"
-	"github.com/driverforge/cli/internal/clierr"
 	"github.com/driverforge/cli/internal/deployrecord"
 	"github.com/driverforge/cli/internal/orgctx"
 	"github.com/driverforge/cli/internal/telemetryread"
@@ -118,7 +117,10 @@ func run(t *testing.T, dir string, args ...string) (string, string, int) {
 	root.SetErr(&stderr)
 	root.SetArgs(append([]string{"--no-update-check", "--project-dir", dir}, args...))
 	_, err := root.ExecuteC()
-	return stdout.String(), stderr.String(), clierr.ExitCode(err)
+	if err == nil {
+		return stdout.String(), stderr.String(), 0
+	}
+	return stdout.String(), stderr.String(), exitFor(err)
 }
 
 func logRow(id string, ms int64, msg, version string) map[string]any {

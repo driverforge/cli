@@ -32,9 +32,9 @@ func runAgentUpgrade(ctx context.Context, out io.Writer, dev orgctx.Device) erro
 	// the agent treat this as a self-deploy (clean restart + /healthz poll) rather
 	// than rejecting it as not-in-project. Older agents don't report it.
 	if h.AgentFilename == "" {
-		return clierr.UserT("Agent can't self-upgrade yet",
+		return clierr.WithCode(clierr.UserT("Agent can't self-upgrade yet",
 			fmt.Sprintf("The Anvil Agent on %s is too old to upgrade itself.", controllerLabel(dev, h)),
-			"Update it once in Composer Pro; after that, `driverforge upgrade` can take over.")
+			"Update it once in Composer Pro; after that, `driverforge upgrade` can take over."), codeAgentOutOfDate)
 	}
 
 	rel, err := agentrelease.Latest(ctx, h.AgentFilename)
@@ -125,6 +125,6 @@ func controllerLabel(dev orgctx.Device, h agent.Health) string {
 // is for crash cards; strip it so the friendly card reads as a sentence.
 func agentReleaseErr(err error) error {
 	msg := strings.TrimPrefix(err.Error(), "agentrelease: ")
-	return clierr.WrapT(err, "Agent update unavailable", capitalise(msg),
-		"Check your connection and try again, or update the agent in Composer Pro.")
+	return clierr.WithCode(clierr.WrapT(err, "Agent update unavailable", capitalise(msg),
+		"Check your connection and try again, or update the agent in Composer Pro."), codeUnavailable)
 }

@@ -56,22 +56,19 @@ func TestIsUser(t *testing.T) {
 	}
 }
 
-func TestExitCode(t *testing.T) {
-	if got := ExitCode(nil); got != 0 {
-		t.Errorf("nil: got %d, want 0", got)
+func TestWithCodeAndIsSilent(t *testing.T) {
+	wrapped := fmt.Errorf("ctx: %w", WithCode(User("m", ""), "device_not_found"))
+	var ue *UserError
+	if !errors.As(wrapped, &ue) || ue.Code != "device_not_found" {
+		t.Errorf("WithCode didn't reach the wrapped UserError: %+v", ue)
 	}
-	if got := ExitCode(errors.New("bug")); got != 1 {
-		t.Errorf("plain error: got %d, want 1", got)
+	if plain := errors.New("bug"); WithCode(plain, "x") != plain {
+		t.Error("WithCode must pass a non-UserError through")
 	}
-	if got := ExitCode(User("m", "")); got != 1 {
-		t.Errorf("UserError without Exit: got %d, want 1", got)
+	if !IsSilent(Silent()) || !IsSilent(fmt.Errorf("w: %w", WithExit(Silent(), 3))) {
+		t.Error("IsSilent(Silent()) = false")
 	}
-	wrapped := fmt.Errorf("ctx: %w", WithExit(User("m", ""), 5))
-	if got := ExitCode(wrapped); got != 5 {
-		t.Errorf("wrapped UserError with Exit 5: got %d, want 5", got)
-	}
-	plain := errors.New("bug")
-	if WithExit(plain, 5); ExitCode(plain) != 1 {
-		t.Error("WithExit must leave a non-UserError at the default")
+	if IsSilent(User("m", "")) || IsSilent(errors.New("bug")) {
+		t.Error("IsSilent matched an error with something to say")
 	}
 }

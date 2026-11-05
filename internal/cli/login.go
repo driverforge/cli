@@ -3,6 +3,7 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -25,7 +26,7 @@ func newLoginCmd() *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
-			out := cmd.OutOrStdout()
+			out := textOut(cmd)
 
 			// The refresh token is a long-lived bearer credential; an http:// auth
 			// endpoint (other than localhost) POSTs it in the clear. Warn but don't
@@ -41,9 +42,21 @@ func newLoginCmd() *cobra.Command {
 				return clierr.WrapT(err, "Sign-in unavailable", "couldn't reach the sign-in service", "check your connection and try again")
 			}
 
-			fmt.Fprintln(out)
-			ui.Fprintln(out, ui.DeviceLoginCard(out, da.VerificationURI, da.VerificationURIComplete, da.UserCode))
-			fmt.Fprintln(out)
+			if structured() {
+				// The one thing a person has to do: say it as its own line, so an
+				// agent can hand the link and code on rather than parse a card.
+				writeJSON(cmd.ErrOrStderr(), map[string]any{"action_required": authorizeOut{
+					Message:     "Open the link in a browser and approve the sign-in with this code.",
+					URL:         da.VerificationURI,
+					URLWithCode: da.VerificationURIComplete,
+					Code:        da.UserCode,
+					ExpiresAt:   timeOut(da.Expiry),
+				}})
+			} else {
+				fmt.Fprintln(out)
+				ui.Fprintln(out, ui.DeviceLoginCard(out, da.VerificationURI, da.VerificationURIComplete, da.UserCode))
+				fmt.Fprintln(out)
+			}
 
 			openURL := da.VerificationURIComplete
 			if openURL == "" {
@@ -58,6 +71,7 @@ func newLoginCmd() *cobra.Command {
 			// Poll for authorization, then persist the token, behind a single
 			// spinner whose line is replaced in place with the "Logged in as …"
 			// confirmation on success.
+			var creds auth.Credentials
 			err = ui.WaitFor(ctx, out, ui.Interactive(flagNoTUI),
 				"Waiting for authorization…",
 				func() (string, error) {
@@ -65,7 +79,7 @@ func newLoginCmd() *cobra.Command {
 					if e != nil {
 						return "", auth.PollError(e)
 					}
-					creds, e := auth.Persist(tok)
+					creds, e = auth.Persist(tok)
 					if e != nil {
 						return "", fmt.Errorf("saving credentials: %w", e)
 					}
@@ -85,14 +99,19 @@ func newLoginCmd() *cobra.Command {
 			// unexpected error (e.g. the API is unreachable or returns 5xx/404) is a
 			// real bug — let it propagate so the top-level handler renders a crash
 			// card and offers to report it.
+			var warnings []warning
 			if err := selectOrgAfterLogin(ctx, out, orgFlag); err != nil {
-				if clierr.IsUser(err) {
-					ui.RenderUserError(out, err)
-					return nil
+				if !clierr.IsUser(err) {
+					return err
 				}
-				return err
+				if structured() {
+					e := describe(err, commandFailure)
+					warnings = append(warnings, warning{Code: e.Code, Message: e.Message + " " + e.Hint})
+				} else {
+					ui.RenderUserError(out, err)
+				}
 			}
-			return nil
+			return emit(cmd, loginOut{User: userOf(creds), Organization: currentOrgOut(), Warnings: nonNilWarnings(warnings)}, noText)
 		},
 	}
 	cmd.Flags().BoolVar(&noBrowser, "no-browser", false, "do not open a browser automatically")
@@ -108,7 +127,6 @@ func newLogoutCmd() *cobra.Command {
 		Short: "Log out and remove stored credentials",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			out := cmd.OutOrStdout()
 			c, err := auth.Load()
 			if err != nil {
 				if errors.Is(err, auth.ErrNotLoggedIn) {
@@ -116,25 +134,30 @@ func newLogoutCmd() *cobra.Command {
 					// (e.g. logged out before this cleared it) — wipe it so the
 					// prompt section doesn't keep showing a dead org.
 					_ = orgctx.Clear()
-					ui.Fprintln(out, ui.Muted("Already logged out."))
-					return nil
+					return emit(cmd, logoutOut{WasLoggedIn: false, Revoked: false}, func(w io.Writer) error {
+						_, err := ui.Fprintln(w, ui.Muted("Already logged out."))
+						return err
+					})
 				}
 				return err
 			}
 			// Best-effort server-side revocation: local logout proceeds regardless,
 			// but if the server refused we say so — the token stays valid until it
 			// expires, which the user may want to act on.
-			if err := auth.Revoke(cmd.Context(), c.RefreshToken); err != nil {
-				ui.Fprintln(out, ui.Muted("Couldn't revoke the session server-side ("+err.Error()+"); removing local credentials anyway."))
-			}
+			revokeErr := auth.Revoke(cmd.Context(), c.RefreshToken)
 			if err := auth.Delete(); err != nil {
 				return fmt.Errorf("removing credentials: %w", err)
 			}
 			if err := orgctx.Clear(); err != nil {
 				return fmt.Errorf("clearing organization context: %w", err)
 			}
-			ui.Fprintln(out, ui.Success("Logged out."))
-			return nil
+			return emit(cmd, logoutOut{WasLoggedIn: true, Revoked: revokeErr == nil}, func(w io.Writer) error {
+				if revokeErr != nil {
+					ui.Fprintln(w, ui.Muted("Couldn't revoke the session server-side ("+revokeErr.Error()+"); removing local credentials anyway."))
+				}
+				_, err := ui.Fprintln(w, ui.Success("Logged out."))
+				return err
+			})
 		},
 	}
 }
@@ -151,12 +174,13 @@ func newWhoamiCmd() *cobra.Command {
 			if err != nil {
 				return err // ErrNotLoggedIn carries a "run `driverforge login`" hint
 			}
-			out := cmd.OutOrStdout()
-			fmt.Fprintln(out, displayUser(c))
-			if !c.Expiry.IsZero() {
-				fmt.Fprintf(out, "token expires %s\n", c.Expiry.Local().Format(time.RFC1123))
-			}
-			return nil
+			return emit(cmd, whoamiOut{User: userOf(c), Organization: currentOrgOut()}, func(w io.Writer) error {
+				fmt.Fprintln(w, displayUser(c))
+				if !c.Expiry.IsZero() {
+					fmt.Fprintf(w, "token expires %s\n", c.Expiry.Local().Format(time.RFC1123))
+				}
+				return nil
+			})
 		},
 	}
 }
@@ -177,4 +201,44 @@ func displayUser(c auth.Credentials) string {
 	default:
 		return "(unknown user)"
 	}
+}
+
+// authorizeOut is the sign-in a person has to approve, as structured output
+// reports it while login waits.
+type authorizeOut struct {
+	Message     string  `json:"message"`
+	URL         string  `json:"url"`
+	URLWithCode string  `json:"url_with_code,omitempty"`
+	Code        string  `json:"code"`
+	ExpiresAt   *string `json:"expires_at"`
+}
+
+// userOut is the signed-in account.
+type userOut struct {
+	ID        string  `json:"id"`
+	Name      *string `json:"name"`
+	Email     *string `json:"email"`
+	ExpiresAt *string `json:"session_expires_at"`
+}
+
+func userOf(c auth.Credentials) userOut {
+	return userOut{ID: c.Subject, Name: optional(c.Name), Email: optional(c.Email), ExpiresAt: timeOut(c.Expiry)}
+}
+
+type loginOut struct {
+	User         userOut   `json:"user"`
+	Organization *orgOut   `json:"organization"`
+	Warnings     []warning `json:"warnings"`
+}
+
+type logoutOut struct {
+	WasLoggedIn bool `json:"was_logged_in"`
+	// Revoked is whether the server confirmed the session is revoked; when it
+	// isn't, the session stays valid until it expires.
+	Revoked bool `json:"revoked"`
+}
+
+type whoamiOut struct {
+	User         userOut `json:"user"`
+	Organization *orgOut `json:"organization"`
 }

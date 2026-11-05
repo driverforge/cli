@@ -28,6 +28,9 @@ func ReviewChanges(ctx context.Context, w io.Writer, files []ReviewFile) (bool, 
 	if len(files) == 0 {
 		return false, nil
 	}
+	if err := checkPrompt("Review these changes"); err != nil {
+		return false, err
+	}
 
 	m := newReviewModel(files)
 	p := tea.NewProgram(m, tea.WithContext(ctx), tea.WithOutput(w))

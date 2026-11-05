@@ -13,10 +13,9 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
-	"os"
-	"path/filepath"
 	"time"
+
+	"github.com/driverforge/cli/internal/userconfig"
 )
 
 // schemaVersion is the on-disk config schema version, for future migrations.
@@ -39,51 +38,19 @@ type Config struct {
 	ErrorReportingConsent string    `json:"errorReportingConsent,omitempty"` // "", "granted", "denied"
 }
 
-// configPath returns the path to the driverforge config file, or "" if the user
-// config dir cannot be determined.
-func configPath() string {
-	dir, err := os.UserConfigDir()
-	if err != nil {
-		return ""
-	}
-	return filepath.Join(dir, "driverforge", "config.json")
-}
+// configFile is the config's name in the user's driverforge config directory.
+const configFile = "config.json"
 
 // Load reads the config, returning a zero-value Config if it is missing or
 // unreadable (errors are intentionally swallowed — telemetry config must never
 // break a command).
-func Load() Config {
-	path := configPath()
-	if path == "" {
-		return Config{}
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return Config{}
-	}
-	var c Config
-	if err := json.Unmarshal(data, &c); err != nil {
-		return Config{}
-	}
-	return c
-}
+func Load() Config { return userconfig.Load[Config](configFile) }
 
 // Save writes the config to disk (0600, since it carries a stable anonymous id).
 // Errors are returned but callers generally swallow them.
 func Save(c Config) error {
-	path := configPath()
-	if path == "" {
-		return nil
-	}
 	c.SchemaVersion = schemaVersion
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	data, err := json.MarshalIndent(c, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(path, data, 0o600)
+	return userconfig.Save(configFile, c)
 }
 
 // newAnonymousID returns a random, non-identifying id (16 random bytes, hex).

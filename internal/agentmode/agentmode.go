@@ -7,6 +7,7 @@ package agentmode
 import (
 	"os"
 	"strconv"
+	"strings"
 )
 
 // agentEnv are variables coding agents set in the shells they run. Presence
@@ -34,4 +35,19 @@ func Enabled() bool {
 		}
 	}
 	return false
+}
+
+// Structured reports whether commands write structured output: one JSON
+// document on stdout, JSON lines for progress and diagnostics on stderr, and
+// no prompts. DRIVERFORGE_OUTPUT is authoritative when set to "json" or
+// "text", so a script can ask for structured output without being an agent and
+// a person can keep text output inside one; otherwise it follows Enabled.
+func Structured() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("DRIVERFORGE_OUTPUT"))) {
+	case "json":
+		return true
+	case "text":
+		return false
+	}
+	return Enabled()
 }

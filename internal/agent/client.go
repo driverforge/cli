@@ -117,6 +117,7 @@ func pinnedFingerprint(expected string) func([][]byte, [][]*x509.Certificate) er
 			// a friendly UserError so it isn't reported as a crash. It survives
 			// net/http + TLS wrapping via errors.As at the top level.
 			return &clierr.UserError{
+				Code:    clierr.CodeCertificateChanged,
 				Title:   "Controller certificate changed",
 				Message: "the controller's TLS certificate doesn't match the pinned fingerprint — refusing to connect",
 				Hint:    "re-run `driverforge device select` if the controller's certificate changed",

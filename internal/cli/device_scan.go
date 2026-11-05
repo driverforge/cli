@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"io"
 	"net"
 	"strings"
 	"sync"
@@ -32,7 +33,7 @@ func newDeviceScanCmd() *cobra.Command {
 		Args:   cobra.NoArgs,
 		Hidden: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			out := cmd.OutOrStdout()
+			out := textOut(cmd)
 
 			if flagVerbose {
 				srcs, _ := discovery.Sources()
@@ -64,16 +65,22 @@ func newDeviceScanCmd() *cobra.Command {
 				fmt.Fprintf(out, "(%d raw datagram(s) received)\n\n", atomic.LoadInt32(&raw))
 			}
 
-			if len(found) == 0 {
-				fmt.Fprintf(out, "No responders for ST=%s on this network segment.\n", st)
-				return nil
-			}
-			tw := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
-			fmt.Fprintln(tw, "HOST\tUSN\tSERVER\tLOCATION")
+			doc := scanOut{Responders: []responderOut{}}
 			for _, c := range found {
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", dash(c.Host), dash(c.USN), dash(c.Server), dash(c.Location))
+				doc.Responders = append(doc.Responders, responderOut{Host: c.Host, USN: c.USN, Server: c.Server, Location: c.Location})
 			}
-			return tw.Flush()
+			return emit(cmd, doc, func(w io.Writer) error {
+				if len(found) == 0 {
+					fmt.Fprintf(w, "No responders for ST=%s on this network segment.\n", st)
+					return nil
+				}
+				tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+				fmt.Fprintln(tw, "HOST\tUSN\tSERVER\tLOCATION")
+				for _, c := range found {
+					fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", dash(c.Host), dash(c.USN), dash(c.Server), dash(c.Location))
+				}
+				return tw.Flush()
+			})
 		},
 	}
 	cmd.Flags().DurationVar(&timeout, "timeout", 4*time.Second, "how long to listen for SSDP advertisements")
@@ -86,4 +93,16 @@ func dash(s string) string {
 		return "-"
 	}
 	return s
+}
+
+type scanOut struct {
+	Responders []responderOut `json:"responders"`
+}
+
+// responderOut is one SSDP reply.
+type responderOut struct {
+	Host     string `json:"host"`
+	USN      string `json:"usn"`
+	Server   string `json:"server"`
+	Location string `json:"location"`
 }

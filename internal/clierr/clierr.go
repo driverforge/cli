@@ -49,11 +49,29 @@ type UserError struct {
 	// guidance style (amber) — for an operation that failed outright (e.g. a
 	// build), as opposed to a precondition the user can go fix. Set via AsFatal.
 	Fatal bool
-	// Exit is the process exit status; zero means the default, 1. Commands
-	// with a documented exit-code contract (the telemetry readers) set it so a
-	// script can branch on the status. Set via WithExit.
+	// Exit is the process exit status; zero means the default for Code (see
+	// the cli package's exit table), else 1. Set via WithExit.
 	Exit int
+	// Code is the stable, machine-readable name of the condition (e.g.
+	// "device_not_found"), reported in structured output so a script or agent
+	// can branch on it. Messages may change; codes don't. Empty means the
+	// generic "failed". Set via WithCode.
+	Code string
 }
+
+// Codes shared across packages. The cli package owns the rest of the
+// vocabulary.
+const (
+	CodeAuthRequired       = "auth_required"       // not signed in, or the session expired
+	CodeInputRequired      = "input_required"      // a prompt would be needed, and prompts are off
+	CodeInterrupted        = "interrupted"         // the user cancelled (Ctrl-C, Esc)
+	CodeConnectionLost     = "connection_lost"     // Driverforge couldn't be reached
+	CodeServiceUnavailable = "service_unavailable" // Driverforge answered with a temporary error
+	CodeOrgNotSelected     = "org_not_selected"    // no organization selected
+	CodeDeviceNotSelected  = "device_not_selected" // no device selected
+	CodeInvalidConfig      = "invalid_config"      // a project file couldn't be read as written
+	CodeCertificateChanged = "certificate_changed" // a controller's TLS certificate no longer matches its pin
+)
 
 // Error renders the message with the hint appended in parentheses, so a
 // UserError still reads sensibly in plain (non-TTY) output and logs.
@@ -123,7 +141,7 @@ func IsFatal(err error) bool {
 }
 
 // WithExit sets the process exit status err should produce, when err is a
-// UserError, and returns err. Other errors are bugs and keep the default.
+// UserError, and returns err. Other errors are bugs and exit 1.
 func WithExit(err error, code int) error {
 	var ue *UserError
 	if errors.As(err, &ue) {
@@ -132,15 +150,20 @@ func WithExit(err error, code int) error {
 	return err
 }
 
-// ExitCode is the process exit status for err: 0 for nil, a UserError's Exit
-// when set, otherwise 1.
-func ExitCode(err error) int {
-	if err == nil {
-		return 0
-	}
+// IsSilent reports whether err is a Silent UserError: one that has already
+// been reported, or needs no report, and only sets the exit status.
+func IsSilent(err error) bool {
 	var ue *UserError
-	if errors.As(err, &ue) && ue.Exit != 0 {
-		return ue.Exit
+	return errors.As(err, &ue) && ue.Title == "" && ue.Message == "" && ue.Hint == ""
+}
+
+// WithCode sets the stable code err reports in structured output, when err is
+// a UserError, and returns err. Don't use it on a package-level sentinel: it
+// would change every use of it — give the sentinel its Code where it's defined.
+func WithCode(err error, code string) error {
+	var ue *UserError
+	if errors.As(err, &ue) {
+		ue.Code = code
 	}
-	return 1
+	return err
 }

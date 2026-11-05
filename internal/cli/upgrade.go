@@ -38,6 +38,9 @@ func newUpgradeCmd() *cobra.Command {
 		Short: "Show and apply available upgrades (CLI, agent, SDK)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if structured() {
+				return emit(cmd, upgradeReport(probeComponents(cmd.Context(), textOut(cmd))), noText)
+			}
 			return runUpgrade(cmd.Context(), cmd.OutOrStdout())
 		},
 	}
@@ -80,7 +83,9 @@ type compRow struct {
 	run      func(ctx context.Context) error
 }
 
-func runUpgrade(ctx context.Context, out io.Writer) error {
+// probeComponents checks the CLI, the selected controller's agent and this
+// driver's SDK. out receives only what an upgrade a row runs prints.
+func probeComponents(ctx context.Context, out io.Writer) []compRow {
 	// The three probes are independent network round-trips (CLI release store,
 	// controller agent, SDK release store); run them concurrently so the table
 	// renders in the slowest single probe's time, not their sum. Each writes
@@ -101,6 +106,11 @@ func runUpgrade(ctx context.Context, out io.Writer) error {
 		}(i)
 	}
 	wg.Wait()
+	return rows
+}
+
+func runUpgrade(ctx context.Context, out io.Writer) error {
+	rows := probeComponents(ctx, out)
 
 	hasUpdate := false
 	runnable := false
@@ -431,4 +441,54 @@ func checkReason(err error) string {
 		return "sign-in issue"
 	}
 	return "unreachable"
+}
+
+// upgradeOut is what upgrade reports in structured output. It never upgrades
+// anything there: the upgrades act on a connected controller or the working
+// tree, and each component's command says how to take it.
+type upgradeOut struct {
+	Components []componentOut `json:"components"`
+}
+
+// componentOut is one component's update status: up_to_date,
+// update_available, blocked (available, but can't be applied yet — the note
+// says why), unknown (couldn't check) or not_applicable.
+type componentOut struct {
+	Name     string  `json:"name"`
+	Detail   *string `json:"detail"`
+	Current  *string `json:"current"`
+	Latest   *string `json:"latest"`
+	Status   string  `json:"status"`
+	Note     string  `json:"note"`
+	Command  *string `json:"command"`
+	NotesURL *string `json:"release_notes_url"`
+}
+
+var compStatus = map[compState]string{
+	stateUpToDate: "up_to_date",
+	stateUpdate:   "update_available",
+	stateUnknown:  "unknown",
+	stateNA:       "not_applicable",
+	stateBlocked:  "blocked",
+}
+
+func upgradeReport(rows []compRow) upgradeOut {
+	o := upgradeOut{Components: make([]componentOut, len(rows))}
+	for i, r := range rows {
+		o.Components[i] = componentOut{
+			Name: r.name, Detail: optional(r.detail),
+			Current: optional(versionValue(r.current)), Latest: optional(versionValue(r.latest)),
+			Status: compStatus[r.state], Note: r.note,
+			Command: optional(r.cmd), NotesURL: optional(r.notesURL),
+		}
+	}
+	return o
+}
+
+// versionValue drops the table's "—" placeholder for a version not known.
+func versionValue(v string) string {
+	if v == "—" {
+		return ""
+	}
+	return v
 }

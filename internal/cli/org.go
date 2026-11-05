@@ -35,21 +35,27 @@ func newOrgListCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if len(orgs) == 0 {
-				fmt.Fprintln(cmd.OutOrStdout(), "You don't belong to any organization yet.")
-				return nil
-			}
 			current, _ := orgctx.Current()
-			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
-			fmt.Fprintln(tw, "\tNAME\tSLUG\tROLE")
+			doc := orgListOut{Organizations: []orgOut{}}
 			for _, o := range orgs {
-				mark := " "
-				if o.ID == current.ID {
-					mark = "*"
-				}
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", mark, o.Name, o.Slug, o.Role)
+				doc.Organizations = append(doc.Organizations, orgOutOf(o, current.ID))
 			}
-			return tw.Flush()
+			return emit(cmd, doc, func(w io.Writer) error {
+				if len(orgs) == 0 {
+					fmt.Fprintln(w, "You don't belong to any organization yet.")
+					return nil
+				}
+				tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+				fmt.Fprintln(tw, "\tNAME\tSLUG\tROLE")
+				for _, o := range orgs {
+					mark := " "
+					if o.ID == current.ID {
+						mark = "*"
+					}
+					fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", mark, o.Name, o.Slug, o.Role)
+				}
+				return tw.Flush()
+			})
 		},
 	}
 }
@@ -71,26 +77,32 @@ func newOrgSelectCmd() *cobra.Command {
 				return err
 			}
 			if len(orgs) == 0 {
-				fmt.Fprintln(cmd.OutOrStdout(), "You don't belong to any organization yet.")
-				return nil
+				return emit(cmd, orgShowOut{}, func(w io.Writer) error {
+					_, err := fmt.Fprintln(w, "You don't belong to any organization yet.")
+					return err
+				})
 			}
 
-			if arg != "" {
-				org := findOrg(orgs, arg)
-				if org == nil {
-					return clierr.User(fmt.Sprintf("organization %q not found", arg), "run `driverforge org list`")
+			var org driverforgeapi.Organization
+			switch {
+			case arg != "":
+				found := findOrg(orgs, arg)
+				if found == nil {
+					return orgNotFoundErr(arg)
 				}
-				return applyOrg(cmd.OutOrStdout(), *org)
+				org = *found
+			case !ui.Interactive(flagNoTUI):
+				return clierr.WithCode(clierr.User("specify an organization", "run `driverforge org select <slug>`"), codeInputRequired)
+			default:
+				remembered, _ := orgctx.Current()
+				if org, err = pickOrg(orgs, remembered.ID); err != nil {
+					return err
+				}
 			}
-			if !ui.Interactive(flagNoTUI) {
-				return fmt.Errorf("specify an organization: `driverforge org select <slug>`")
-			}
-			remembered, _ := orgctx.Current()
-			org, err := pickOrg(orgs, remembered.ID)
-			if err != nil {
+			if err := applyOrg(textOut(cmd), org); err != nil {
 				return err
 			}
-			return applyOrg(cmd.OutOrStdout(), org)
+			return emit(cmd, orgShowOut{Organization: currentOrgOut()}, noText)
 		},
 	}
 }
@@ -116,8 +128,10 @@ func newOrgShowCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Fprintln(cmd.OutOrStdout(), orgLabel(o.Name, o.Slug))
-			return nil
+			return emit(cmd, orgShowOut{Organization: currentOrgOut()}, func(w io.Writer) error {
+				_, err := fmt.Fprintln(w, orgLabel(o.Name, o.Slug))
+				return err
+			})
 		},
 	}
 }
@@ -139,7 +153,7 @@ func selectOrgAfterLogin(ctx context.Context, out io.Writer, pref string) error 
 	if pref != "" {
 		org := findOrg(orgs, pref)
 		if org == nil {
-			return clierr.User(fmt.Sprintf("organization %q not found", pref), "run `driverforge org list` to see organizations")
+			return orgNotFoundErr(pref)
 		}
 		return applyOrg(out, *org)
 	}
@@ -238,4 +252,40 @@ func orgLabel(name, slug string) string {
 		return fmt.Sprintf("%s (%s)", name, slug)
 	}
 	return name
+}
+
+// orgNotFoundErr is the friendly condition for an organization argument that
+// matches none of the user's.
+func orgNotFoundErr(arg string) error {
+	return clierr.WithCode(clierr.User(fmt.Sprintf("organization %q not found", arg), "run `driverforge org list` to see organizations"), codeOrgNotFound)
+}
+
+// orgOut is an organization in structured output.
+type orgOut struct {
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Slug    string `json:"slug"`
+	Role    string `json:"role,omitempty"`
+	Current bool   `json:"current"`
+}
+
+func orgOutOf(o driverforgeapi.Organization, currentID string) orgOut {
+	return orgOut{ID: o.ID, Name: o.Name, Slug: o.Slug, Role: o.Role, Current: o.ID == currentID}
+}
+
+// currentOrgOut is the selected organization, or nil when none is.
+func currentOrgOut() *orgOut {
+	o, err := orgctx.Current()
+	if err != nil {
+		return nil
+	}
+	return &orgOut{ID: o.ID, Name: o.Name, Slug: o.Slug, Current: true}
+}
+
+type orgListOut struct {
+	Organizations []orgOut `json:"organizations"`
+}
+
+type orgShowOut struct {
+	Organization *orgOut `json:"organization"`
 }

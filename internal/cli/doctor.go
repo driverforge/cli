@@ -42,62 +42,107 @@ func newDoctorCmd() *cobra.Command {
 			"rewrite the entry Lua looks up the project's driver token.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runDoctor(cmd.Context(), cmd.OutOrStdout(), yes)
+			doc, err := runDoctor(cmd.Context(), textOut(cmd), yes)
+			if err != nil && !clierr.IsSilent(err) {
+				return err
+			}
+			if eerr := emit(cmd, doc, noText); eerr != nil {
+				return eerr
+			}
+			return err
 		},
 	}
 	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "apply the repairs without confirming")
 	return cmd
 }
 
-func runDoctor(ctx context.Context, out io.Writer, yes bool) error {
-	proj, err := project.Locate(flagProjectDir)
+// doctorOut is what doctor reports in structured output.
+type doctorOut struct {
+	Healthy bool       `json:"healthy"`
+	Checks  []checkOut `json:"checks"`
+	// Changes are the files a repair writes; Repaired is whether it wrote them.
+	Changes  []string  `json:"changes"`
+	Repaired bool      `json:"repaired"`
+	Warnings []warning `json:"warnings"`
+}
+
+type checkOut struct {
+	Name string `json:"name"`
+	What string `json:"what"`
+	OK   bool   `json:"ok"`
+}
+
+// runDoctor diagnoses the project and repairs what it can. A failure before
+// the diagnosis returns no report; a declined repair (or, under structured
+// output, one not approved with --yes) returns the report and a silent error.
+func runDoctor(ctx context.Context, out io.Writer, yes bool) (doctorOut, error) {
+	doc := doctorOut{Checks: []checkOut{}, Changes: []string{}, Warnings: []warning{}}
+	proj, err := requireProject(flagProjectDir)
 	if err != nil {
-		return err
+		return doc, err
 	}
 	cfg, err := driverforgeconfig.Load(proj.Dir)
 	if err != nil {
-		return err
+		return doc, err
 	}
 	if cfg == nil {
 		// Nothing to diagnose: this is init's job, not a repair.
-		return clierr.UserT("Not set up for Driverforge",
+		return doc, clierr.WithCode(clierr.UserT("Not set up for Driverforge",
 			fmt.Sprintf("%s has no .driverforge/config.json", proj.Dir),
-			"run `driverforge init` to set this driver up")
+			"run `driverforge init` to set this driver up"), codeNotInitialised)
 	}
 
 	buildTargets := len(cfg.BuildTargets) > 0
 	diag := initdriver.Diagnose(proj, buildTargets)
 	printDiagnosis(out, diag)
+	doc.Healthy = diag.Healthy()
+	for _, c := range diag.Checks {
+		doc.Checks = append(doc.Checks, checkOut{Name: c.Name, What: c.What, OK: c.OK})
+	}
 	if diag.Healthy() {
-		return nil
+		return doc, nil
 	}
 
 	changes, warnings, err := planRepair(ctx, out, proj, cfg, diag)
 	if err != nil {
-		return err
+		return doc, err
 	}
 	if len(changes) == 0 {
 		// Diagnose found drift the transforms decline to fix. Say so rather than
 		// reporting a silent success the checks plainly contradict.
-		return clierr.UserT("Nothing to repair automatically",
+		return doc, clierr.WithCode(clierr.UserT("Nothing to repair automatically",
 			"the checks above failed, but no file change would fix them",
-			"inspect the reported files, or re-create the project with `driverforge init`")
+			"inspect the reported files, or re-create the project with `driverforge init`"), codeRepairUnavailable)
+	}
+	for _, c := range changes {
+		doc.Changes = append(doc.Changes, c.RelPath)
+	}
+	for _, w := range warnings {
+		doc.Warnings = append(doc.Warnings, warning{Code: codeWarning, Message: w})
 	}
 
-	if !yes {
+	switch {
+	case yes:
+	case structured():
+		// The review is a prompt; without --yes there's nobody to approve it.
+		doc.Warnings = append(doc.Warnings, warning{Code: codeRepairPending,
+			Message: "Not repaired: re-run with --yes to write the listed changes."})
+		return doc, clierr.Silent()
+	default:
 		ok, cerr := reviewCodeChanges(ctx, out, warnings, changes)
 		if cerr != nil {
-			return cerr
+			return doc, cerr
 		}
 		if !ok {
-			return clierr.Silent()
+			return doc, clierr.Silent()
 		}
 	}
 	if err := executeFileChanges(ctx, out, proj, "", "", changes); err != nil {
-		return err
+		return doc, err
 	}
+	doc.Repaired = true
 	fmt.Fprintf(out, "\n%s\n", ui.Celebrate("Repaired — this driver is set up again."))
-	return nil
+	return doc, nil
 }
 
 // printDiagnosis reports each check, so a healthy run says what it verified
@@ -193,9 +238,9 @@ func lookupProjectToken(ctx context.Context, out io.Writer, cfg *driverforgeconf
 					return "Found project " + firstNonEmpty(p.Name, p.Slug), nil
 				}
 			}
-			return "", clierr.UserT("Project not found",
+			return "", clierr.WithCode(clierr.UserT("Project not found",
 				fmt.Sprintf("no project %q in your organizations", cfg.Project.Slug),
-				"check `driverforge project list`, or re-run `driverforge init`")
+				"check `driverforge project list`, or re-run `driverforge init`"), codeProjectNotFound)
 		})
 	if err != nil {
 		return "", err
