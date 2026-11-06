@@ -91,7 +91,7 @@ func TestStructuredHelpShape(t *testing.T) {
 	}
 
 	stdout, _ = runHelp(t, "skills")
-	if err := json.Unmarshal([]byte(stdout), &doc); err != nil || len(doc.Subcommands) != 2 {
+	if err := json.Unmarshal([]byte(stdout), &doc); err != nil || len(doc.Subcommands) != 3 {
 		t.Errorf("bare group: %v, %+v", err, doc.Subcommands)
 	}
 }

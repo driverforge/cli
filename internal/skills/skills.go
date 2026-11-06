@@ -150,6 +150,33 @@ func Install(root, name, cliVersion string, force bool) (Result, error) {
 	return res, nil
 }
 
+// InstalledIn returns the skills Install wrote into root: the directories whose
+// marker names them. A missing root has none.
+func InstalledIn(root string) ([]string, error) {
+	dirs, err := os.ReadDir(root)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("skills: %w", err)
+	}
+	var names []string
+	for _, d := range dirs {
+		if !d.IsDir() {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(root, d.Name(), Marker))
+		if err != nil {
+			continue
+		}
+		var m marker
+		if json.Unmarshal(b, &m) == nil && m.Skill == d.Name() {
+			names = append(names, d.Name())
+		}
+	}
+	return names, nil
+}
+
 // same reports whether dir holds exactly files.
 func same(dir string, files map[string][]byte) bool {
 	n := 0

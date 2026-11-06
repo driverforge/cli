@@ -81,8 +81,9 @@ const (
 	codeRuntimeUnavailable = "runtime_unavailable"
 
 	// Agent skills.
-	codeSkillNotFound = "skill_not_found"
-	codeSkillConflict = "skill_conflict"
+	codeSkillNotFound     = "skill_not_found"
+	codeSkillConflict     = "skill_conflict"
+	codeSkillNotInstalled = "skill_not_installed"
 
 	// Commands that can't run without a person.
 	codeInteractiveRequired = "interactive_required"

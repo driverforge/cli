@@ -362,3 +362,88 @@ func TestSkillsInstallGlobalAndPathConflict(t *testing.T) {
 		t.Errorf("exit %d, %s", code, stdout)
 	}
 }
+
+// skillsUpdateEnv makes a git repo and a home directory, each holding the
+// dev-cycle skill as an older CLI installed it, and returns the repo.
+func skillsUpdateEnv(t *testing.T) (repo, home string) {
+	t.Helper()
+	t.Setenv("DRIVERFORGE_OUTPUT", "json")
+	home = t.TempDir()
+	t.Setenv("HOME", home)
+	repo = t.TempDir()
+	cmd := exec.Command("git", "init", "-q")
+	cmd.Dir = repo
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, out)
+	}
+	for _, root := range []string{filepath.Join(repo, ".agents", "skills"), filepath.Join(home, ".agents", "skills")} {
+		if _, err := skills.Install(root, "anvil-driver-dev-cycle", "0.0.1", false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return repo, home
+}
+
+func updatedPaths(t *testing.T, stdout string) map[string]string {
+	t.Helper()
+	got := map[string]string{}
+	for _, s := range decode(t, stdout)["skills"].([]any) {
+		s := s.(map[string]any)
+		p, _ := filepath.EvalSymlinks(s["path"].(string))
+		got[p] = s["action"].(string)
+	}
+	return got
+}
+
+// With no flag, update refreshes the skill in the repository and in the home
+// directory; a second run finds both up to date.
+func TestSkillsUpdateBothLocations(t *testing.T) {
+	repo, home := skillsUpdateEnv(t)
+	stdout, stderr, code := run(t, repo, "skills", "update")
+	if code != 0 {
+		t.Fatalf("exit %d\nstdout: %s\nstderr: %s", code, stdout, stderr)
+	}
+	repoSkill, _ := filepath.EvalSymlinks(filepath.Join(repo, ".agents", "skills", "anvil-driver-dev-cycle"))
+	homeSkill, _ := filepath.EvalSymlinks(filepath.Join(home, ".agents", "skills", "anvil-driver-dev-cycle"))
+	got := updatedPaths(t, stdout)
+	if got[repoSkill] != "updated" || got[homeSkill] != "updated" || len(got) != 2 {
+		t.Fatalf("first update = %v", got)
+	}
+	b, _ := os.ReadFile(filepath.Join(repoSkill, "SKILL.md"))
+	if strings.Contains(string(b), `"0.0.1"`) {
+		t.Error("the repo's skill still carries the old version")
+	}
+
+	stdout, _, _ = run(t, repo, "skills", "update")
+	for p, a := range updatedPaths(t, stdout) {
+		if a != "unchanged" {
+			t.Errorf("second update: %s %s", p, a)
+		}
+	}
+}
+
+func TestSkillsUpdateGlobalOnly(t *testing.T) {
+	repo, home := skillsUpdateEnv(t)
+	stdout, _, code := run(t, repo, "skills", "update", "--global")
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, stdout)
+	}
+	got := updatedPaths(t, stdout)
+	homeSkill, _ := filepath.EvalSymlinks(filepath.Join(home, ".agents", "skills", "anvil-driver-dev-cycle"))
+	if len(got) != 1 || got[homeSkill] != "updated" {
+		t.Errorf("--global = %v", got)
+	}
+}
+
+func TestSkillsUpdateNothingInstalled(t *testing.T) {
+	t.Setenv("DRIVERFORGE_OUTPUT", "json")
+	t.Setenv("HOME", t.TempDir())
+	stdout, code := runFailing(t, "--project-dir", t.TempDir(), "skills", "update")
+	if code != 1 || decode(t, stdout)["error"].(map[string]any)["code"] != codeSkillNotInstalled {
+		t.Errorf("exit %d, %s", code, stdout)
+	}
+	stdout, code = runFailing(t, "--project-dir", t.TempDir(), "skills", "update", "nope")
+	if code != 1 || decode(t, stdout)["error"].(map[string]any)["code"] != codeSkillNotFound {
+		t.Errorf("unknown skill: exit %d, %s", code, stdout)
+	}
+}

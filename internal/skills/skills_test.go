@@ -133,3 +133,24 @@ func TestInstallUnknownSkill(t *testing.T) {
 		t.Fatalf("err = %v, want ErrUnknown", err)
 	}
 }
+
+func TestInstalledInListsOnlyWhatInstallWrote(t *testing.T) {
+	root := t.TempDir()
+	if names, err := InstalledIn(filepath.Join(root, "missing")); err != nil || names != nil {
+		t.Fatalf("missing root = %v, %v", names, err)
+	}
+	if _, err := Install(root, devCycle, "1.0.0", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "someone-elses"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A copied directory: the marker names another skill.
+	if err := os.CopyFS(filepath.Join(root, "renamed"), os.DirFS(filepath.Join(root, devCycle))); err != nil {
+		t.Fatal(err)
+	}
+	names, err := InstalledIn(root)
+	if err != nil || len(names) != 1 || names[0] != devCycle {
+		t.Fatalf("InstalledIn = %v, %v; want only %s", names, err, devCycle)
+	}
+}

@@ -27,9 +27,8 @@ Run these once per session, before the loop.
 
 1. `driverforge --version`. This skill was installed by driverforge
    `{{cli_version}}`. If the version differs, the skill may name flags or codes
-   that changed: tell the developer and suggest `driverforge skills install` (with
-   `--global` if the skill is under `~/.agents/skills`) to refresh it, then
-   continue.
+   that changed: tell the developer and suggest `driverforge skills update` to
+   refresh it, then continue.
 2. `driverforge whoami` succeeds. If it fails with `auth_required`, ask the
    developer to run `driverforge login`. Never attempt a login yourself.
 3. A device resolves: `driverforge device list` shows the controller, and
