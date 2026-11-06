@@ -89,21 +89,21 @@ func newSkillsInstallCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "install [skill...]",
 		Short: "Install skills into a coding agent's skills directory",
-		Long: `Install skills (all of them by default) into Claude Code's personal skills
-directory, ~/.claude/skills. --project installs into the driver repo's
-.claude/skills instead, so everyone working on the driver gets them; --dir
-installs anywhere, for agents that read skills from another directory.
+		Long: `Install skills (all of them by default) into ~/.agents/skills, the shared
+skills directory coding agents read. --project installs into the driver repo's
+.agents/skills instead, so everyone working on the driver gets them; --dir
+installs anywhere.
 
 Installing again replaces the copy a previous install wrote. A directory of
 the same name that driverforge didn't write is left alone unless --force.`,
 		Example: `  driverforge skills install
   driverforge skills install --project
-  driverforge skills install --dir ~/.agents/skills`,
+  driverforge skills install --dir ./tools/skills`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runSkillsInstall(cmd, args, inProject, dir, force)
 		},
 	}
-	cmd.Flags().BoolVar(&inProject, "project", false, "install into the driver repo's .claude/skills")
+	cmd.Flags().BoolVar(&inProject, "project", false, "install into the driver repo's .agents/skills")
 	cmd.Flags().StringVar(&dir, "dir", "", "install into this skills directory")
 	cmd.Flags().BoolVar(&force, "force", false, "replace a directory driverforge didn't install")
 	return cmd
@@ -151,7 +151,7 @@ func runSkillsInstall(cmd *cobra.Command, names []string, inProject bool, dir st
 }
 
 // skillsDir is the directory skills install into: --dir, the driver repo's
-// .claude/skills with --project, otherwise ~/.claude/skills.
+// .agents/skills with --project, otherwise ~/.agents/skills.
 func skillsDir(inProject bool, dir string) (string, error) {
 	switch {
 	case dir != "" && inProject:
@@ -165,13 +165,13 @@ func skillsDir(inProject bool, dir string) (string, error) {
 				"this isn't a driver repo",
 				"Run from the driver's directory (or pass --project-dir), or pass --dir."), codeNotAProject)
 		}
-		return filepath.Join(p.Dir, ".claude", "skills"), nil
+		return filepath.Join(p.Dir, ".agents", "skills"), nil
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", clierr.Wrap(err, "your home directory couldn't be found", "Pass --dir with the skills directory to install into.")
 	}
-	return filepath.Join(home, ".claude", "skills"), nil
+	return filepath.Join(home, ".agents", "skills"), nil
 }
 
 // expandHome expands a leading ~ the shell left alone (a quoted path, or one
