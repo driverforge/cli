@@ -45,7 +45,7 @@ Every key is always present, null when it doesn't apply.
 | `level` | The log level | `error` | null |
 | `name` | The callback it was raised in | The callback it was raised in | The callback |
 | `message` | The log text | The error message | null |
-| `payload` | null | `{"type", "stacktrace", "args", "lastLog"}` | `{"args", "result"}` |
+| `payload` | `{"args", "argsTruncated"}` when the call passed anything but strings, otherwise null | `{"type", "stacktrace", "args", "lastLog"}` | `{"args", "result"}` |
 | `status` | null | null | The callback's outcome |
 | `duration_ms` | null | null | How long the callback ran |
 | `error_id` | null | null | The error it raised, if any |

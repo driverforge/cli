@@ -80,6 +80,39 @@ func TestEntryKeysAreTheAllowList(t *testing.T) {
 	}
 }
 
+// TestLogArgsArePayload: a log whose call passed a table carries its arguments
+// as payload, exactly as sent; a text-only log's payload stays null.
+func TestLogArgsArePayload(t *testing.T) {
+	args := `["Response received:",{"status":200,"body":"OK"}]`
+	e := FromLog(driverforgeapi.LogEntry{ID: "l1", Message: "Response received: [table]", Args: json.RawMessage(args)}, nil)
+	if want := `{"args":` + args + `,"argsTruncated":false}`; string(e.Payload) != want {
+		t.Errorf("payload = %s, want %s", e.Payload, want)
+	}
+	if *e.Message != "Response received: [table]" {
+		t.Errorf("message = %q", *e.Message)
+	}
+
+	capped := FromLog(driverforgeapi.LogEntry{ID: "l2", Args: json.RawMessage(`[{"items":[1,"[truncated]"]}]`), ArgsTruncated: true}, nil)
+	if !strings.HasSuffix(string(capped.Payload), `"argsTruncated":true}`) {
+		t.Errorf("capped payload = %s", capped.Payload)
+	}
+
+	for _, a := range []string{"", "null", " null "} {
+		if e := FromLog(driverforgeapi.LogEntry{ID: "l3", Message: "hi", Args: json.RawMessage(a)}, nil); string(e.Payload) != "null" {
+			t.Errorf("args %q: payload = %s, want null", a, e.Payload)
+		}
+	}
+
+	// The graph response decodes into the same payload.
+	var l driverforgeapi.LogEntry
+	if err := json.Unmarshal([]byte(`{"id":"l4","message":"m","args":`+args+`,"argsTruncated":false}`), &l); err != nil {
+		t.Fatal(err)
+	}
+	if e := FromLog(l, nil); !strings.Contains(string(e.Payload), `{"status":200,"body":"OK"}`) {
+		t.Errorf("decoded payload = %s", e.Payload)
+	}
+}
+
 func TestFromPublication(t *testing.T) {
 	// The live record carries routing and device meta the contract must never
 	// emit; conversion keeps only mapped fields.
@@ -129,6 +162,21 @@ func TestTruncate(t *testing.T) {
 	}
 	if ev.Truncated.Field != "payload" || ev.Truncated.TotalBytes != total || ev.Truncated.ReturnedBytes != 10 {
 		t.Errorf("truncated = %+v", ev.Truncated)
+	}
+
+	// A log's arguments are capped like any payload, and when both its
+	// message and payload are cut, the record describes the payload.
+	big := `["` + strings.Repeat("y", 100) + `"]`
+	lg := FromLog(driverforgeapi.LogEntry{ID: "l2", Message: strings.Repeat("m", 50), Args: json.RawMessage(big)}, nil)
+	total = len(lg.Payload)
+	if !Truncate(&lg, 20) {
+		t.Fatal("over-cap log payload not truncated")
+	}
+	if len(*lg.Message) != 20 || lg.Truncated.Field != "payload" || lg.Truncated.TotalBytes != total || lg.Truncated.ReturnedBytes != 20 {
+		t.Errorf("message %d bytes, truncated %+v", len(*lg.Message), lg.Truncated)
+	}
+	if err := json.Unmarshal(lg.Payload, &s); err != nil || !strings.HasPrefix(s, `{"args":["yyy`) {
+		t.Errorf("truncated log payload = %s", lg.Payload)
 	}
 
 	small := FromLog(driverforgeapi.LogEntry{Message: "ok"}, nil)

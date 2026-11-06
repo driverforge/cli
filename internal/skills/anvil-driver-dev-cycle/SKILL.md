@@ -114,8 +114,8 @@ The JSON document from `logs`, `errors` and `events` has these fields that matte
 
 - `scope` — the org, project, `device` and `version` actually read. Check it every
   time; a wrong scope reads cleanly and silently.
-- `entries[]` — oldest first. A log's text is `message` (its `payload` is null);
-  an event's `payload` is `{"args", "result"}`; an error's is
+- `entries[]` — oldest first. A log's text is `message`; its `payload` is
+  `{"args", "argsTruncated"}` when it logged a table, otherwise null; an event's `payload` is `{"args", "result"}`; an error's is
   `{"type", "stacktrace", "args", "lastLog"}`. Every entry has `driver_version`
   and `correlation_id`.
 - `warnings[]` — each has a stable `code`.

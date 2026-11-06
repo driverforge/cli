@@ -238,7 +238,8 @@ func writeTextEntry(w io.Writer, e telemetryread.Entry) {
 		head = append(head, *e.Message)
 	}
 	fmt.Fprintln(w, strings.Join(head, "  "))
-	if p := bytes.TrimSpace(e.Payload); len(p) > 0 && !bytes.Equal(p, []byte("null")) {
+	p, capped := textPayload(e)
+	if len(p) > 0 && !bytes.Equal(p, []byte("null")) {
 		var pretty bytes.Buffer
 		if json.Indent(&pretty, p, "    ", "  ") == nil {
 			fmt.Fprintln(w, "    "+pretty.String())
@@ -246,10 +247,30 @@ func writeTextEntry(w io.Writer, e telemetryread.Entry) {
 			fmt.Fprintln(w, "    "+string(p))
 		}
 	}
+	if capped {
+		fmt.Fprintln(w, "    … arguments capped by the SDK where marked [truncated]")
+	}
 	if e.Truncated != nil {
 		fmt.Fprintf(w, "    … truncated: %d of %d bytes (driverforge get %s --type %s)\n",
 			e.Truncated.ReturnedBytes, e.Truncated.TotalBytes, e.ID, e.Type)
 	}
+}
+
+// textPayload is the part of e's payload a person reads: a log's arguments
+// alone, with whether the SDK capped them; any other payload whole.
+func textPayload(e telemetryread.Entry) (json.RawMessage, bool) {
+	p := bytes.TrimSpace(e.Payload)
+	if e.Type != telemetryread.KindLog || e.Truncated != nil && e.Truncated.Field == "payload" {
+		return p, false
+	}
+	var args struct {
+		Args          json.RawMessage `json:"args"`
+		ArgsTruncated bool            `json:"argsTruncated"`
+	}
+	if json.Unmarshal(p, &args) != nil || args.Args == nil {
+		return p, false
+	}
+	return args.Args, args.ArgsTruncated
 }
 
 // result is a finished read, ready to write.

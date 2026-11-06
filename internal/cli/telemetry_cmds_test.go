@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/driverforge/cli/internal/auth"
+	"github.com/driverforge/cli/internal/driverforgeapi"
 	"github.com/driverforge/cli/internal/orgctx"
 	"github.com/driverforge/cli/internal/telemetryread"
 )
@@ -175,6 +176,48 @@ func TestLogsInARepoReadsTheSelectedDeviceAndVersion(t *testing.T) {
 	filters := g.vars[0]["filters"].(map[string]any)
 	if fmt.Sprint(filters["controllers"]) != "[000FFF9BB74C]" || fmt.Sprint(filters["driverVersions"]) != "[12]" {
 		t.Errorf("server filters = %v, want the selected device and version", filters)
+	}
+}
+
+// TestLogsCarryStructuredArgs: a log call's non-string arguments come back as
+// its payload, nested, and render as JSON under the line in text output.
+func TestLogsCarryStructuredArgs(t *testing.T) {
+	withArgs := logRow("l2", 2000, "Response received: [table]", "12")
+	withArgs["args"] = []any{"Response received:", map[string]any{"status": 200, "body": "OK"}}
+	withArgs["argsTruncated"] = false
+	g := &fakeGraph{logs: []map[string]any{withArgs, logRow("l1", 1000, "plain", "12")}}
+	dir := telemetryEnv(t, g)
+	scope := []string{"--org", "acme", "--project", "smart-tv", "--device", "bench-a"}
+
+	stdout, _, code := run(t, dir, append([]string{"logs", "-o", "json"}, scope...)...)
+	if code != 0 {
+		t.Fatalf("exit %d\n%s", code, stdout)
+	}
+	entries := decode(t, stdout)["entries"].([]any)
+	if p := entries[0].(map[string]any)["payload"]; p != nil {
+		t.Errorf("text-only log payload = %v, want null", p)
+	}
+	p, _ := entries[1].(map[string]any)["payload"].(map[string]any)
+	if fmt.Sprint(p["args"]) != "[Response received: map[body:OK status:200]]" || p["argsTruncated"] != false {
+		t.Errorf("payload = %v", p)
+	}
+
+	stdout, _, code = run(t, dir, append([]string{"logs", "-o", "text"}, scope...)...)
+	if code != 0 {
+		t.Fatalf("text: exit %d\n%s", code, stdout)
+	}
+	if !strings.Contains(stdout, "Response received: [table]\n    [\n      \"Response received:\",") || strings.Contains(stdout, "argsTruncated") {
+		t.Errorf("text output:\n%s", stdout)
+	}
+}
+
+func TestTextLogArgsCappedBySDK(t *testing.T) {
+	e := telemetryread.FromLog(driverforgeapi.LogEntry{ID: "l1", Message: "m [table]",
+		Args: json.RawMessage(`["m",{"items":[1,"[truncated]"]}]`), ArgsTruncated: true}, nil)
+	var buf bytes.Buffer
+	writeTextEntry(&buf, e)
+	if !strings.Contains(buf.String(), "capped by the SDK") || strings.Contains(buf.String(), "argsTruncated") {
+		t.Errorf("text:\n%s", buf.String())
 	}
 }
 

@@ -72,17 +72,21 @@ type ErrorFilters struct {
 	TraceID        string   `json:"traceId,omitempty"`
 }
 
-// LogEntry is one driver log line. CreatedAt is epoch milliseconds.
+// LogEntry is one driver log line. CreatedAt is epoch milliseconds. Args is
+// the log call's arguments as the exact JSON the server sent, null when every
+// argument was a string; ArgsTruncated is set when the SDK capped them.
 type LogEntry struct {
-	ID            string  `json:"id"`
-	CreatedAt     float64 `json:"createdAt"`
-	Level         string  `json:"level"`
-	Message       string  `json:"message"`
-	TraceID       string  `json:"traceId"`
-	EventName     string  `json:"eventName"`
-	Driver        string  `json:"driver"`
-	DriverVersion string  `json:"driverVersion"`
-	Controller    string  `json:"controller"`
+	ID            string          `json:"id"`
+	CreatedAt     float64         `json:"createdAt"`
+	Level         string          `json:"level"`
+	Message       string          `json:"message"`
+	Args          json.RawMessage `json:"args"`
+	ArgsTruncated bool            `json:"argsTruncated"`
+	TraceID       string          `json:"traceId"`
+	EventName     string          `json:"eventName"`
+	Driver        string          `json:"driver"`
+	DriverVersion string          `json:"driverVersion"`
+	Controller    string          `json:"controller"`
 }
 
 // EventEntry is one driver event. Args and Result are kept as the exact JSON
@@ -122,7 +126,7 @@ type ErrorEntry struct {
 }
 
 const (
-	logFields   = `id createdAt level message traceId eventName driver driverVersion controller`
+	logFields   = `id createdAt level message args argsTruncated traceId eventName driver driverVersion controller`
 	eventFields = `traceId name args result startedAt finishedAt duration status errorId lastLog driver driverVersion controller`
 	errorFields = `id createdAt type value stacktrace args eventName lastLog traceId fingerprint driver driverVersion controller`
 	pageFields  = `hasMore cursor totalCount windowMinutes`

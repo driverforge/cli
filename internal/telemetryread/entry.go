@@ -50,8 +50,9 @@ type Truncated struct {
 //
 //   - message: a log's text; an error's message; null for events.
 //   - payload: an event's {"args", "result"}; an error's {"type",
-//     "stacktrace", "args", "lastLog"}; null for logs, whose text is the
-//     message.
+//     "stacktrace", "args", "lastLog"}; a log's {"args", "argsTruncated"}
+//     when the call passed anything but strings, otherwise null, the text
+//     being the message.
 //   - name: the event's name; for a log or error, the event it was raised in.
 //   - level: logs and errors ("error"); null for events.
 //   - status, duration_ms, error_id: events only.
@@ -164,13 +165,24 @@ func FromLog(l driverforgeapi.LogEntry, names Names) Entry {
 		Level:         &level,
 		Name:          opt(l.EventName),
 		Message:       &l.Message,
-		Payload:       json.RawMessage("null"),
+		Payload:       logPayload(l),
 		Driver:        l.Driver,
 		DriverVersion: opt(l.DriverVersion),
 		Device:        device(l.Controller, names),
 		CorrelationID: opt(l.TraceID),
 		at:            at,
 	}
+}
+
+// logPayload is a log's arguments, null for a text-only log: the SDK sends
+// args only when some argument wasn't a string.
+func logPayload(l driverforgeapi.LogEntry) json.RawMessage {
+	args := raw(l.Args)
+	if bytes.Equal(bytes.TrimSpace(args), []byte("null")) {
+		return json.RawMessage("null")
+	}
+	truncated, _ := json.Marshal(l.ArgsTruncated)
+	return object(field{"args", args}, field{"argsTruncated", truncated})
 }
 
 // FromEvent converts a graph event. Its id is the trace id, which is how `get`

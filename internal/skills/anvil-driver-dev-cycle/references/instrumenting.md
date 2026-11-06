@@ -62,14 +62,32 @@ Driverforge:Init("drv_…", { logger = Log })
 
 Every call to that logger's `Trace`, `Debug`, `Info`, `Warn`, `Error` and `Fatal`
 methods (any of lower, Pascal or UPPER case) is then forwarded as well as written
-as before. Without a logger, forward explicitly with `Anvil:ForwardLog("INFO", message)`.
+as before. Without a logger, forward explicitly with `Anvil:ForwardLog("INFO", ...)`,
+which takes the same arguments as a logger call.
 
-A log's arguments are converted with `tostring` and joined with spaces, so a
-table logs as `table: 0x…`. Encode structured data first:
+Pass tables straight to the logger; don't encode them:
 
 ```lua
-Log:Info("vendor-raw status", C4:JsonEncode(response))
+Log:Info("vendor-raw status", response)
 ```
+
+The log's `message` reads `vendor-raw status [table]`, and the arguments arrive
+in order, as JSON, in its `payload.args`:
+
+```json
+"payload": {"args": ["vendor-raw status", {"status": 200, "body": "OK"}], "argsTruncated": false}
+```
+
+A log whose arguments were all strings has a null `payload`. Values JSON can't
+hold arrive as placeholders: `"[nil]"`, `"[function]"`, `"[userdata]"`,
+`"[cycle]"`, `"nan"`, `"inf"`. The SDK caps each call's arguments (depth 6,
+100 entries per table, 2 KiB per string, about 16 KiB in all). A cut leaves
+`"[truncated]"` in place and sets `argsTruncated: true`. For a bigger
+response, log just the part you need, or log it in pieces.
+
+If `message` shows `table: 0x…` and `payload` is null, the driver's vendored
+SDK predates structured arguments. Update it, or encode the table yourself:
+`Log:Info("vendor-raw status", C4:JsonEncode(response))`.
 
 Give temporary lines a prefix you can wait on (`vendor-raw`, `dbg-`), and remove
 them or lower them to `Debug` when the job is done.
