@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"regexp"
@@ -266,7 +267,7 @@ func TestSkillsExitStatusesMatch(t *testing.T) {
 func TestSkillsInstallStructured(t *testing.T) {
 	t.Setenv("DRIVERFORGE_OUTPUT", "json")
 	dir := filepath.Join(t.TempDir(), "skills")
-	stdout, stderr, code := run(t, t.TempDir(), "skills", "install", "--dir", dir)
+	stdout, stderr, code := run(t, t.TempDir(), "skills", "install", "--path", dir)
 	if code != 0 {
 		t.Fatalf("exit %d\nstdout: %s\nstderr: %s", code, stdout, stderr)
 	}
@@ -279,20 +280,59 @@ func TestSkillsInstallStructured(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	stdout, _, _ = run(t, t.TempDir(), "skills", "install", "--dir", dir)
+	stdout, _, _ = run(t, t.TempDir(), "skills", "install", "--path", dir)
 	if a := decode(t, stdout)["skills"].([]any)[0].(map[string]any)["action"]; a != "unchanged" {
 		t.Errorf("reinstall action = %v, want unchanged", a)
 	}
 
-	stdout, code = runFailing(t, "skills", "install", "nope", "--dir", dir)
+	stdout, code = runFailing(t, "skills", "install", "nope", "--path", dir)
 	if code != 1 || decode(t, stdout)["error"].(map[string]any)["code"] != codeSkillNotFound {
 		t.Errorf("unknown skill: exit %d, %s", code, stdout)
 	}
 }
 
-func TestSkillsInstallProjectNeedsARepo(t *testing.T) {
+// With no flag, skills install at the root of the git repository, even from
+// a subdirectory.
+func TestSkillsInstallDefaultsToTheRepoRoot(t *testing.T) {
 	t.Setenv("DRIVERFORGE_OUTPUT", "json")
-	stdout, code := runFailing(t, "--project-dir", t.TempDir(), "skills", "install", "--project")
+	repo := t.TempDir()
+	cmd := exec.Command("git", "init", "-q")
+	cmd.Dir = repo
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, out)
+	}
+	sub := filepath.Join(repo, "drivers", "pump")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stdout, stderr, code := run(t, sub, "skills", "install")
+	if code != 0 {
+		t.Fatalf("exit %d\nstdout: %s\nstderr: %s", code, stdout, stderr)
+	}
+	want, _ := filepath.EvalSymlinks(filepath.Join(repo, ".agents", "skills"))
+	got, _ := filepath.EvalSymlinks(decode(t, stdout)["dir"].(string))
+	if got != want {
+		t.Errorf("dir = %s, want %s", got, want)
+	}
+}
+
+// --global installs into ~/.agents/skills.
+func TestSkillsInstallGlobal(t *testing.T) {
+	t.Setenv("DRIVERFORGE_OUTPUT", "json")
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	stdout, _, code := run(t, t.TempDir(), "skills", "install", "--global")
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, stdout)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".agents", "skills", "anvil-driver-dev-cycle", "SKILL.md")); err != nil {
+		t.Error(err)
+	}
+}
+
+func TestSkillsInstallOutsideARepo(t *testing.T) {
+	t.Setenv("DRIVERFORGE_OUTPUT", "json")
+	stdout, code := runFailing(t, "--project-dir", t.TempDir(), "skills", "install")
 	if code != exitContext || decode(t, stdout)["error"].(map[string]any)["code"] != codeNotAProject {
 		t.Errorf("exit %d, %s", code, stdout)
 	}
@@ -315,9 +355,9 @@ func runFailing(t *testing.T, args ...string) (string, int) {
 	return "", 0
 }
 
-func TestSkillsInstallProjectAndDirConflict(t *testing.T) {
+func TestSkillsInstallGlobalAndPathConflict(t *testing.T) {
 	t.Setenv("DRIVERFORGE_OUTPUT", "json")
-	stdout, code := runFailing(t, "skills", "install", "--project", "--dir", t.TempDir())
+	stdout, code := runFailing(t, "skills", "install", "--global", "--path", t.TempDir())
 	if code != exitUsage || decode(t, stdout)["error"].(map[string]any)["code"] != codeUsage {
 		t.Errorf("exit %d, %s", code, stdout)
 	}

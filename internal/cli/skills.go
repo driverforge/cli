@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/driverforge/cli/internal/buildinfo"
 	"github.com/driverforge/cli/internal/clierr"
+	"github.com/driverforge/cli/internal/gitrepo"
 	"github.com/driverforge/cli/internal/project"
 	"github.com/driverforge/cli/internal/skills"
 )
@@ -82,35 +84,35 @@ type skillsInstallOut struct {
 
 func newSkillsInstallCmd() *cobra.Command {
 	var (
-		inProject bool
-		dir       string
-		force     bool
+		global bool
+		path   string
+		force  bool
 	)
 	cmd := &cobra.Command{
 		Use:   "install [skill...]",
 		Short: "Install skills into a coding agent's skills directory",
-		Long: `Install skills (all of them by default) into ~/.agents/skills, the shared
-skills directory coding agents read. --project installs into the driver repo's
-.agents/skills instead, so everyone working on the driver gets them; --dir
-installs anywhere.
+		Long: `Install skills (all of them by default) into .agents/skills at the root of
+the current git repository, the skills directory coding agents read. Commit it,
+and everyone working on the driver gets the same skills. --global installs into
+~/.agents/skills for every project instead; --path installs anywhere.
 
 Installing again replaces the copy a previous install wrote. A directory of
 the same name that driverforge didn't write is left alone unless --force.`,
 		Example: `  driverforge skills install
-  driverforge skills install --project
-  driverforge skills install --dir ./tools/skills`,
+  driverforge skills install --global
+  driverforge skills install --path ./tools/skills`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runSkillsInstall(cmd, args, inProject, dir, force)
+			return runSkillsInstall(cmd, args, global, path, force)
 		},
 	}
-	cmd.Flags().BoolVar(&inProject, "project", false, "install into the driver repo's .agents/skills")
-	cmd.Flags().StringVar(&dir, "dir", "", "install into this skills directory")
+	cmd.Flags().BoolVar(&global, "global", false, "install for the current user, into ~/.agents/skills")
+	cmd.Flags().StringVar(&path, "path", "", "install into this skills directory")
 	cmd.Flags().BoolVar(&force, "force", false, "replace a directory driverforge didn't install")
 	return cmd
 }
 
-func runSkillsInstall(cmd *cobra.Command, names []string, inProject bool, dir string, force bool) error {
-	root, err := skillsDir(inProject, dir)
+func runSkillsInstall(cmd *cobra.Command, names []string, global bool, path string, force bool) error {
+	root, err := skillsDir(cmd.Context(), global, path)
 	if err != nil {
 		return err
 	}
@@ -150,28 +152,32 @@ func runSkillsInstall(cmd *cobra.Command, names []string, inProject bool, dir st
 	return emit(cmd, doc, noText)
 }
 
-// skillsDir is the directory skills install into: --dir, the driver repo's
-// .agents/skills with --project, otherwise ~/.agents/skills.
-func skillsDir(inProject bool, dir string) (string, error) {
+// skillsDir is the directory skills install into: --path, ~/.agents/skills
+// with --global, otherwise .agents/skills at the root of the git repository
+// (or, outside one, the driver project).
+func skillsDir(ctx context.Context, global bool, path string) (string, error) {
 	switch {
-	case dir != "" && inProject:
-		return "", clierr.WithCode(clierr.User("--project and --dir can't be used together", "Pass one of them."), codeUsage)
-	case dir != "":
-		return filepath.Abs(expandHome(dir))
-	case inProject:
-		p, err := project.Locate(flagProjectDir)
+	case path != "" && global:
+		return "", clierr.WithCode(clierr.User("--global and --path can't be used together", "Pass one of them."), codeUsage)
+	case path != "":
+		return filepath.Abs(expandHome(path))
+	case global:
+		home, err := os.UserHomeDir()
 		if err != nil {
-			return "", clierr.WithCode(clierr.Wrap(err,
-				"this isn't a driver repo",
-				"Run from the driver's directory (or pass --project-dir), or pass --dir."), codeNotAProject)
+			return "", clierr.Wrap(err, "your home directory couldn't be found", "Pass --path with the skills directory to install into.")
 		}
-		return filepath.Join(p.Dir, ".agents", "skills"), nil
+		return filepath.Join(home, ".agents", "skills"), nil
 	}
-	home, err := os.UserHomeDir()
+	if root, ok := gitrepo.Root(ctx, flagProjectDir); ok {
+		return filepath.Join(root, ".agents", "skills"), nil
+	}
+	p, err := project.Locate(flagProjectDir)
 	if err != nil {
-		return "", clierr.Wrap(err, "your home directory couldn't be found", "Pass --dir with the skills directory to install into.")
+		return "", clierr.WithCode(clierr.Wrap(err,
+			"this isn't a git repository or a driver project",
+			"Run from the driver's repository (or pass --project-dir), or install for every project with --global."), codeNotAProject)
 	}
-	return filepath.Join(home, ".agents", "skills"), nil
+	return filepath.Join(p.Dir, ".agents", "skills"), nil
 }
 
 // expandHome expands a leading ~ the shell left alone (a quoted path, or one
