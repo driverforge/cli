@@ -20,11 +20,11 @@ import (
 // handleAlreadyInit handles a project that already carries .driverforge/config.json:
 // it reports the setup and stops. Init sets a project up exactly once — it never
 // mutates an existing one; SDK updates go through the `driverforge upgrade` picker.
-func handleAlreadyInit(out io.Writer, proj project.Project, cfg *driverforgeconfig.Config) error {
+func handleAlreadyInit(out io.Writer, proj project.Project, cfg *driverforgeconfig.Config, versioningFlag string) error {
 	// Configs written before the versioning field existed: run the interview
 	// once and record the choice, so --increment and deploys can bump.
 	if !versioning.Valid(cfg.Versioning) {
-		scheme, err := gatherVersioningScheme(out, proj)
+		scheme, err := gatherVersioningScheme(out, proj, versioningFlag)
 		if err != nil {
 			return err
 		}
@@ -249,14 +249,18 @@ func resolveSDK(ctx context.Context, out io.Writer) (path, version string, cache
 		}
 		return p, rel.Version, true, nil
 	}
-	ok, err := ui.Confirm(
-		fmt.Sprintf("Driverforge SDK %s isn't installed locally. Download it now?", rel.Version),
-		"Fetched from releases.driverforge.com into your local cache.", true)
-	if err != nil {
-		return "", "", false, err
-	}
-	if !ok {
-		return "", "", false, sdkDownloadDeclined()
+	// Without a terminal, running init is the consent: the download only
+	// fills the local cache.
+	if ui.Interactive(flagNoTUI) {
+		ok, err := ui.Confirm(
+			fmt.Sprintf("Driverforge SDK %s isn't installed locally. Download it now?", rel.Version),
+			"Fetched from releases.driverforge.com into your local cache.", true)
+		if err != nil {
+			return "", "", false, err
+		}
+		if !ok {
+			return "", "", false, sdkDownloadDeclined()
+		}
 	}
 	p, v, err := downloadSDK(ctx, out, rel.Version, fmt.Sprintf("Downloading Driverforge SDK %s…", rel.Version))
 	return p, v, false, err

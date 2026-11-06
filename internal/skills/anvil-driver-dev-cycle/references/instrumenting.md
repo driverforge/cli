@@ -3,6 +3,37 @@
 What the Driverforge SDK records on its own, and how to add the evidence a question
 needs. Full SDK documentation: https://go.driverforge.com/sdk.
 
+## Setting up a driver
+
+A driver without `.driverforge/config.json` isn't set up yet. `driverforge init`
+embeds the SDK, wires `Driverforge:Init` and `Anvil:OnDriverInit` into the entry
+file, and links or creates the Driverforge project the driver reports to. Use it
+rather than writing that wiring by hand.
+
+Under a coding agent init can't ask its questions, so every answer is a flag. Run
+`driverforge init` with none first: its `input_required` error lists what's
+unanswered in `details.missing`, and what it found in the driver (the logger
+global, the versioning scheme) in `details.detected`.
+
+1. Ask the developer whether to link an existing project
+   (`driverforge init --project <org>/<slug>`) or create one
+   (`driverforge init --create-project <name>`, with `--org <slug>` when no
+   organization is active). Creating a project counts against the organization's
+   plan: only create one when the developer asks for it.
+2. Answer the rest: `--versioning date|integer` (the detected scheme unless told
+   otherwise), `--build-configs` or `--no-build-configs`, `--logger <global>`
+   (the detected logger) or `--no-logger`, and in a git repository `--branch
+   <name>` or `--no-branch`.
+3. Add `--dry-run`. Show the developer the `project` it will link or create and
+   each `changes[].diff`. Nothing is created or written.
+4. Once they approve, run the same command with `--yes` instead. The result
+   carries the `project` (`action`, `id`, `slug`) and the files it wrote.
+5. `driverforge doctor` reports nothing missing.
+
+init runs once. On a driver that's already set up it reports `already_set_up` and
+changes nothing; `driverforge doctor` repairs missing wiring and
+`driverforge upgrade` updates the SDK.
+
 ## What is recorded without code changes
 
 Once the driver calls `Driverforge:Init`, the SDK wraps the Control4 callbacks the

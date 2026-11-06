@@ -20,7 +20,6 @@ import (
 	"github.com/driverforge/cli/internal/project"
 	"github.com/driverforge/cli/internal/ui"
 	"github.com/driverforge/cli/internal/versioning"
-	"github.com/driverforge/cli/pkg/c4z/driverxml"
 )
 
 // defaultInitCommitMessage is the suggested commit message for the branch init
@@ -65,19 +64,8 @@ func gatherBranchIntent(ctx context.Context, out io.Writer, projectDir, defaultB
 		fmt.Fprintln(out, ui.Skipped("Git branch: none"))
 		return "", "", nil
 	}
-	if !gitrepo.ValidBranchName(ctx, root, name) {
-		return "", "", &clierr.UserError{
-			Title:   "Invalid branch name",
-			Message: fmt.Sprintf("%q isn't a valid git branch name", name),
-			Hint:    "re-run and choose a name without spaces or special characters",
-		}
-	}
-	if gitrepo.BranchExists(ctx, root, name) {
-		return "", "", &clierr.UserError{
-			Title:   "Branch already exists",
-			Message: fmt.Sprintf("a branch named %q already exists", name),
-			Hint:    "re-run and choose a different name",
-		}
+	if err := checkBranchName(ctx, root, name); err != nil {
+		return "", "", err
 	}
 	fmt.Fprintln(out, ui.Success("Git branch: "+name))
 
@@ -95,19 +83,30 @@ func gatherBranchIntent(ctx context.Context, out io.Writer, projectDir, defaultB
 	return name, commitMsg, nil
 }
 
+// checkBranchName refuses a branch name git won't accept or that's taken.
+func checkBranchName(ctx context.Context, root, name string) error {
+	if !gitrepo.ValidBranchName(ctx, root, name) {
+		return clierr.WithCode(clierr.UserT("Invalid branch name",
+			fmt.Sprintf("%q isn't a valid git branch name", name),
+			"choose a name without spaces or special characters"), codeUsage)
+	}
+	if gitrepo.BranchExists(ctx, root, name) {
+		return clierr.WithCode(clierr.UserT("Branch already exists",
+			fmt.Sprintf("a branch named %q already exists", name),
+			"choose a different name"), codeNameTaken)
+	}
+	return nil
+}
+
 // gatherVersioningScheme asks how driverforge should bump the driver's <version>
 // (build --increment and every deploy), suggesting the scheme the authored
 // value already looks like — an existing numbering is never silently converted.
-func gatherVersioningScheme(out io.Writer, proj project.Project) (string, error) {
-	current := ""
-	if data, err := os.ReadFile(filepath.Join(proj.SrcDir, "driver.xml")); err == nil {
-		v, _ := driverxml.ReadVersion(data)
-		current = strings.TrimSpace(v)
-	}
-	detected := versioning.Detect(current)
-	if current == "" {
-		// Nothing authored to preserve — a fresh driver defaults to date-based.
-		detected = versioning.Date
+// A scheme given as --versioning answers it.
+func gatherVersioningScheme(out io.Writer, proj project.Project, flag string) (string, error) {
+	current, detected := detectScheme(proj)
+	if flag != "" {
+		fmt.Fprintln(out, ui.Success("Versioning: "+schemeLabel(flag)))
+		return flag, nil
 	}
 
 	dateNext, _ := versioning.Next(versioning.Date, current, time.Now())
@@ -127,12 +126,15 @@ func gatherVersioningScheme(out io.Writer, proj project.Project) (string, error)
 	if err != nil {
 		return "", err
 	}
-	label := "date-based (YYYYMMDDNN)"
-	if scheme == versioning.Integer {
-		label = "incrementing integer"
-	}
-	fmt.Fprintln(out, ui.Success("Versioning: "+label))
+	fmt.Fprintln(out, ui.Success("Versioning: "+schemeLabel(scheme)))
 	return scheme, nil
+}
+
+func schemeLabel(scheme string) string {
+	if scheme == versioning.Integer {
+		return "incrementing integer"
+	}
+	return "date-based (YYYYMMDDNN)"
 }
 
 // requireCleanTree refuses to proceed when the project is in a git repo with a
@@ -170,14 +172,7 @@ func treeClean(ctx context.Context, projectDir string) bool {
 // (a hard prerequisite for the graph calls init makes).
 func requireLogin(ctx context.Context) error {
 	if _, err := auth.Current(ctx); err != nil {
-		if errors.Is(err, auth.ErrNotLoggedIn) {
-			return &clierr.UserError{
-				Title:   "Not logged in",
-				Message: "driverforge init needs you to be logged in",
-				Hint:    "run `driverforge login`",
-			}
-		}
-		return err
+		return loginAwareErr(err)
 	}
 	return nil
 }
@@ -201,21 +196,33 @@ func resolveOrg(ctx context.Context, cl *driverforgeapi.Client) (orgctx.Org, err
 			Hint:    "create one at " + newOrgURL,
 		}
 	}
-	// No non-interactive guard here: runInit rejects a non-interactive terminal
-	// up front, so this path is always interactive.
+	if !ui.Interactive(flagNoTUI) {
+		slugs := make([]string, len(orgs))
+		for i, o := range orgs {
+			slugs[i] = o.Slug
+		}
+		return orgctx.Org{}, newCmdErr(codeInputRequired,
+			"No organization is active, and --org wasn't given.",
+			"Pass one of the candidates to --org.").with("missing", []string{"--org"}).with("candidates", slugs).asUserError()
+	}
 
 	picked, err := pickOrg(orgs, "")
 	if err != nil {
 		return orgctx.Org{}, err
 	}
 	o := orgctx.Org{ID: picked.ID, Name: picked.Name, Slug: picked.Slug}
+	return o, useOrg(o)
+}
+
+// useOrg makes o the active organization, like `driverforge org select`.
+func useOrg(o orgctx.Org) error {
 	if err := orgctx.SetCurrent(o); err != nil {
-		return orgctx.Org{}, fmt.Errorf("saving organization: %w", err)
+		return fmt.Errorf("saving organization: %w", err)
 	}
 	// The metrics client keyed the org at process start; re-key it so any
 	// events emitted later in this run land on the org just chosen.
 	metricsClient.SetOrg(o.ID)
-	return o, nil
+	return nil
 }
 
 // gatherProject collects the project decision without mutating anything: pick an
@@ -277,12 +284,9 @@ func linkProjectByRef(ctx context.Context, out io.Writer, cl *driverforgeapi.Cli
 	if err != nil {
 		return orgctx.Org{}, projectPlan{}, err
 	}
-	if err := orgctx.SetCurrent(org); err != nil {
-		return orgctx.Org{}, projectPlan{}, fmt.Errorf("saving organization: %w", err)
+	if err := useOrg(org); err != nil {
+		return orgctx.Org{}, projectPlan{}, err
 	}
-	// Re-key the metrics client, as in gatherOrg: the org was snapshotted at
-	// process start, before this run chose one.
-	metricsClient.SetOrg(org.ID)
 	fmt.Fprintln(out, ui.Success("Organization: "+orgLabel(org.Name, org.Slug)))
 	fmt.Fprintln(out, ui.Success("Project: "+proj.Name))
 	return org, projectPlan{existing: &proj}, nil
@@ -299,19 +303,15 @@ func resolveProjectRef(ctx context.Context, cl *driverforgeapi.Client, ref strin
 
 	if orgSlug, projSlug, ok := strings.Cut(ref, "/"); ok {
 		if orgSlug == "" || projSlug == "" {
-			return orgctx.Org{}, driverforgeapi.Project{}, &clierr.UserError{
-				Title:   "Invalid --project",
-				Message: fmt.Sprintf("%q isn't a valid project reference", ref),
-				Hint:    "use <org-slug>/<project-slug>, or a project slug",
-			}
+			return orgctx.Org{}, driverforgeapi.Project{}, clierr.WithCode(clierr.UserT("Invalid --project",
+				fmt.Sprintf("%q isn't a valid project reference", ref),
+				"use <org-slug>/<project-slug>, or a project slug"), codeUsage)
 		}
 		o := findOrg(orgs, orgSlug)
 		if o == nil {
-			return orgctx.Org{}, driverforgeapi.Project{}, &clierr.UserError{
-				Title:   "Organization not found",
-				Message: fmt.Sprintf("no organization %q", orgSlug),
-				Hint:    "run `driverforge org list` to see your organizations",
-			}
+			return orgctx.Org{}, driverforgeapi.Project{}, clierr.WithCode(clierr.UserT("Organization not found",
+				fmt.Sprintf("no organization %q", orgSlug),
+				"run `driverforge org list` to see your organizations"), codeOrgNotFound)
 		}
 		projects, err := cl.ListProjects(ctx, o.ID)
 		if err != nil {
@@ -319,11 +319,9 @@ func resolveProjectRef(ctx context.Context, cl *driverforgeapi.Client, ref strin
 		}
 		proj := findProjectBySlug(projects, projSlug)
 		if proj == nil {
-			return orgctx.Org{}, driverforgeapi.Project{}, &clierr.UserError{
-				Title:   "Project not found",
-				Message: fmt.Sprintf("no project %q in %s", projSlug, o.Slug),
-				Hint:    "check the slug, or run `driverforge init` without --project to pick",
-			}
+			return orgctx.Org{}, driverforgeapi.Project{}, clierr.WithCode(clierr.UserT("Project not found",
+				fmt.Sprintf("no project %q in %s", projSlug, o.Slug),
+				"check the slug, or create it with --create-project"), codeProjectNotFound)
 		}
 		return orgctx.Org{ID: o.ID, Name: o.Name, Slug: o.Slug}, *proj, nil
 	}
@@ -341,11 +339,9 @@ func resolveProjectRef(ctx context.Context, cl *driverforgeapi.Client, ref strin
 	}
 	switch len(matches) {
 	case 0:
-		return orgctx.Org{}, driverforgeapi.Project{}, &clierr.UserError{
-			Title:   "Project not found",
-			Message: fmt.Sprintf("no project with slug %q", ref),
-			Hint:    "check the slug, or use <org-slug>/<project-slug>",
-		}
+		return orgctx.Org{}, driverforgeapi.Project{}, clierr.WithCode(clierr.UserT("Project not found",
+			fmt.Sprintf("no project with slug %q", ref),
+			"check the slug, or use <org-slug>/<project-slug>"), codeProjectNotFound)
 	case 1:
 		proj := matches[0]
 		o := findByID(orgs, proj.OrganizationID)
@@ -358,11 +354,9 @@ func resolveProjectRef(ctx context.Context, cl *driverforgeapi.Client, ref strin
 		}
 		return orgctx.Org{ID: o.ID, Name: o.Name, Slug: o.Slug}, proj, nil
 	default:
-		return orgctx.Org{}, driverforgeapi.Project{}, &clierr.UserError{
-			Title:   "Ambiguous project",
-			Message: fmt.Sprintf("more than one project has the slug %q", ref),
-			Hint:    "qualify it: <org-slug>/<project-slug>",
-		}
+		return orgctx.Org{}, driverforgeapi.Project{}, clierr.WithCode(clierr.UserT("Ambiguous project",
+			fmt.Sprintf("more than one project has the slug %q", ref),
+			"qualify it: <org-slug>/<project-slug>, or add --org"), codeContextAmbiguous)
 	}
 }
 
@@ -603,12 +597,9 @@ func detectLogger(srcDir, entryRel string) string {
 // leaving other errors untouched.
 func loginAwareErr(err error) error {
 	if errors.Is(err, auth.ErrNotLoggedIn) {
-		return &clierr.UserError{
-			Title:   "Not logged in",
-			Message: "driverforge init needs you to be logged in",
-			Hint:    "run `driverforge login`",
-			Err:     err,
-		}
+		return clierr.WithCode(clierr.WrapT(err, "Not logged in",
+			"driverforge init needs you to be logged in",
+			"run `driverforge login`"), codeAuthRequired)
 	}
 	return err
 }

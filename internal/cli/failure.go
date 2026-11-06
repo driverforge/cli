@@ -56,8 +56,11 @@ const (
 	codeNameTaken         = "name_taken"
 	// doctor
 	codeRepairUnavailable = "repair_unavailable"
-	codeRepairPending     = "repair_pending" // a warning: repairs listed but not written
-	codeForbidden         = "forbidden"
+	// init
+	codeProjectLimit          = "project_limit_reached"
+	codeSubscriptionSuspended = "subscription_suspended"
+	codeRepairPending         = "repair_pending" // a warning: repairs listed but not written
+	codeForbidden             = "forbidden"
 
 	// Telemetry readers.
 	codeEntryNotFound = "entry_not_found"
@@ -104,6 +107,7 @@ var codeExit = map[string]int{
 	codeNotAProject:       exitContext,
 	codeNotInitialised:    exitContext,
 	codeRateLimited:       exitRateLimited,
+	codeProjectLimit:      exitRateLimited,
 	codeInterrupted:       exitInterrupted,
 }
 

@@ -31,7 +31,9 @@ Run these once per session, before the loop.
 3. A device resolves: `driverforge device list` shows the controller, and
    `driverforge logs --tail 1` doesn't fail with `context_ambiguous` or
    `context_unresolved`. If it does, follow the error's `hint`.
-4. The SDK is wired: `driverforge doctor` reports nothing missing.
+4. The SDK is wired: `driverforge doctor` reports nothing missing. If it fails
+   with `not_initialised`, the driver isn't set up: follow "Setting up a driver"
+   in [references/instrumenting.md](references/instrumenting.md).
 
 Under a coding agent every command writes one JSON document to stdout and never
 prompts. Parse it; don't scrape text.

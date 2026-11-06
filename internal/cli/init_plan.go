@@ -91,9 +91,18 @@ func reviewCodeChanges(ctx context.Context, out io.Writer, warnings []string, ch
 	return ui.ReviewChanges(ctx, out, files)
 }
 
-// confirmPlan shows the built-up recipe and asks for the single, final go-ahead.
-// Nothing has been changed until this returns true.
-func confirmPlan(out io.Writer, pp projectPlan, buildTargets bool, branch, commitMsg string, fileChanges int, sdkEmbedded bool) (bool, error) {
+// printDryRun shows a dry run's changes, as the reviewer would.
+func printDryRun(out io.Writer, warnings []string, changes []initdriver.Change) {
+	for _, w := range warnings {
+		fmt.Fprintf(out, "\n⚠ %s\n", w)
+	}
+	for _, c := range changes {
+		fmt.Fprintf(out, "\n%s", ui.RenderFileDiff(c.RelPath, c.Old, c.New))
+	}
+}
+
+// printPlan shows the built-up recipe: what applying it will do.
+func printPlan(out io.Writer, pp projectPlan, buildTargets bool, branch, commitMsg string, fileChanges int, sdkEmbedded bool) {
 	fmt.Fprintf(out, "\n%s\n", ui.Heading("On apply, Driverforge will:"))
 	if pp.create != nil {
 		fmt.Fprintf(out, "  • Create project %q (%s)\n", pp.create.name, pp.create.platform.Name)
@@ -113,8 +122,6 @@ func confirmPlan(out io.Writer, pp projectPlan, buildTargets bool, branch, commi
 	if branch != "" && commitMsg != "" {
 		fmt.Fprintf(out, "  • Commit the changes (%q)\n", commitMsg)
 	}
-
-	return ui.Confirm("Apply this plan?", "Nothing has changed yet — this links/creates the project and writes the files.", true)
 }
 
 // fileChange builds a Change for writing content to abs, classifying it as a

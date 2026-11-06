@@ -22,7 +22,8 @@ import (
 // create or link the project, create the git branch (if any), then write the
 // files. The project token arrives with the project itself, so there is nothing
 // to resolve or provision in between.
-func executeInit(ctx context.Context, out io.Writer, proj project.Project, cl *driverforgeapi.Client, org orgctx.Org, pp projectPlan, dp driverPlan, branch, commitMsg string) error {
+// It returns the linked or created project and the changes written.
+func executeInit(ctx context.Context, out io.Writer, proj project.Project, cl *driverforgeapi.Client, org orgctx.Org, pp projectPlan, dp driverPlan, branch, commitMsg string) (driverforgeapi.Project, []initdriver.Change, error) {
 	var (
 		linked driverforgeapi.Project
 		steps  []ui.Step
@@ -97,9 +98,9 @@ func executeInit(ctx context.Context, out io.Writer, proj project.Project, cl *d
 	}
 
 	if err := ui.RunSteps(ctx, out, ui.Interactive(flagNoTUI), steps); err != nil {
-		return executeErr(err)
+		return linked, written, executeErr(err)
 	}
-	return nil
+	return linked, written, nil
 }
 
 // executeErr maps a failed execution step to a friendly error (plan limit /
@@ -107,19 +108,13 @@ func executeInit(ctx context.Context, out io.Writer, proj project.Project, cl *d
 func executeErr(err error) error {
 	switch {
 	case errors.Is(err, driverforgeapi.ErrProjectLimit):
-		return &clierr.UserError{
-			Title:   "Project limit reached",
-			Message: "your plan doesn't include creating another project",
-			Hint:    "upgrade your plan at " + orgLinkURL("plan", "settings/subscription"),
-			Err:     err,
-		}
+		return clierr.WithCode(clierr.WrapT(err, "Project limit reached",
+			"your plan doesn't include creating another project",
+			"upgrade your plan at "+orgLinkURL("plan", "settings/subscription")), codeProjectLimit)
 	case errors.Is(err, driverforgeapi.ErrSubscriptionSuspended):
-		return &clierr.UserError{
-			Title:   "Subscription suspended",
-			Message: "your organization's subscription is suspended",
-			Hint:    "update billing at " + orgLinkURL("billing", "settings/billing"),
-			Err:     err,
-		}
+		return clierr.WithCode(clierr.WrapT(err, "Subscription suspended",
+			"your organization's subscription is suspended",
+			"update billing at "+orgLinkURL("billing", "settings/billing")), codeSubscriptionSuspended)
 	}
 	return loginAwareErr(err)
 }

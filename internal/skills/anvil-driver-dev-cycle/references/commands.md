@@ -96,5 +96,6 @@ it cut.
 | `driverforge device list` | The org's controllers |
 | `driverforge device select` | Choose the default controller. Interactive: ask the developer to run it, or pass `--device` instead |
 | `driverforge device capabilities` | Check the Anvil agent on the controller answers |
+| `driverforge init` | Set a driver up: embed the SDK and link or create its project. Every answer is a flag; preview with `--dry-run`, apply with `--yes` (see instrumenting.md) |
 | `driverforge doctor` | Check the driver's SDK wiring |
 | `driverforge whoami` | Check the sign-in |

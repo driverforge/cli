@@ -36,62 +36,86 @@ type driverPlan struct {
 }
 
 // initPreflight rejects, before any prompting, the conditions that make
-// `driverforge init` impossible or pointless: a non-interactive terminal, no
-// project, an already-initialised project, not being logged in, or a dirty tree.
+// `driverforge init` impossible or pointless: no project, an
+// already-initialised project, not being logged in, or a dirty tree (which a
+// dry run, writing nothing, doesn't mind).
 //
 // A logged-out user is a hard stop here rather than mid-flow; a missing org, by
 // contrast, is resolvable in-flow (see resolveOrg) and is deliberately not checked.
 //
-// done is true when init has already reported the situation and should stop
-// without error — today only the already-initialised case.
-func initPreflight(ctx context.Context, out io.Writer, projectDir string) (proj project.Project, done bool, err error) {
-	if !ui.Interactive(flagNoTUI) {
-		return project.Project{}, false, &clierr.UserError{
-			Code:    codeInteractiveRequired,
-			Title:   "Interactive terminal required",
-			Message: "driverforge init walks you through linking a project and approving changes",
-			Hint:    "run it in an interactive terminal",
-		}
-	}
-
+// cfg is non-nil when the project is already initialised: init has reported
+// the setup and stops without error.
+func initPreflight(ctx context.Context, out io.Writer, projectDir string, o initOpts) (proj project.Project, cfg *driverforgeconfig.Config, err error) {
 	proj, err = requireProject(projectDir)
 	if err != nil {
-		return project.Project{}, false, err
+		return project.Project{}, nil, err
 	}
 
 	// Already initialised? The committed .driverforge/config.json is the authoritative
 	// marker — report the setup rather than dragging the user through it again.
-	cfg, err := driverforgeconfig.Load(proj.Dir)
+	cfg, err = driverforgeconfig.Load(proj.Dir)
 	if err != nil {
-		return project.Project{}, false, err
+		return project.Project{}, nil, err
 	}
 	if cfg != nil {
-		return proj, true, handleAlreadyInit(out, proj, cfg)
+		return proj, cfg, handleAlreadyInit(out, proj, cfg, o.versioning)
 	}
 
 	if err := requireLogin(ctx); err != nil {
-		return project.Project{}, false, err
+		return project.Project{}, nil, err
 	}
-	if err := requireCleanTree(ctx, proj.Dir, "driverforge init"); err != nil {
-		return project.Project{}, false, err
+	if !o.dryRun {
+		if err := requireCleanTree(ctx, proj.Dir, "driverforge init"); err != nil {
+			return project.Project{}, nil, err
+		}
 	}
-	return proj, false, nil
+	return proj, nil, nil
 }
 
 // gatherOrgAndProject resolves which Driverforge project the driver links to,
 // without creating anything. --project names it up front (the org comes from the
-// slug); otherwise the org is resolved — showing the picker when none is active —
+// slug, or --org); --create-project names a new one, in --org or the active
+// org; otherwise the org is resolved — showing the picker when none is active —
 // and the project chosen or described for later creation.
-func gatherOrgAndProject(ctx context.Context, out io.Writer, cl *driverforgeapi.Client, projectRef string) (orgctx.Org, projectPlan, error) {
-	if projectRef != "" {
-		return linkProjectByRef(ctx, out, cl, projectRef)
+func gatherOrgAndProject(ctx context.Context, out io.Writer, cl *driverforgeapi.Client, o initOpts) (orgctx.Org, projectPlan, error) {
+	if o.project != "" {
+		ref := o.project
+		if o.org != "" {
+			ref = o.org + "/" + ref
+		}
+		return linkProjectByRef(ctx, out, cl, ref)
 	}
 
-	org, err := resolveOrg(ctx, cl)
+	var (
+		org orgctx.Org
+		err error
+	)
+	if o.org != "" {
+		org, err = orgBySlug(ctx, cl, o.org)
+		if err == nil {
+			err = useOrg(org)
+		}
+	} else {
+		org, err = resolveOrg(ctx, cl)
+	}
 	if err != nil {
 		return orgctx.Org{}, projectPlan{}, err
 	}
 	fmt.Fprintln(out, ui.Success("Organization: "+orgLabel(org.Name, org.Slug)))
+
+	if o.createProject != "" {
+		platforms, err := loadPlatforms(ctx, out, cl)
+		if err != nil {
+			return orgctx.Org{}, projectPlan{}, err
+		}
+		platform, err := choosePlatform(platforms, o.platform)
+		if err != nil {
+			return orgctx.Org{}, projectPlan{}, err
+		}
+		fmt.Fprintln(out, ui.Success("Platform: "+platform.Name))
+		fmt.Fprintln(out, ui.Success("Project: "+o.createProject+" (new)"))
+		return org, projectPlan{create: &createIntent{name: o.createProject, description: o.description, platform: platform}}, nil
+	}
 
 	pp, err := gatherProject(ctx, out, cl, org)
 	if err != nil {
@@ -103,12 +127,15 @@ func gatherOrgAndProject(ctx context.Context, out io.Writer, cl *driverforgeapi.
 // gatherDriverShape collects the remaining decisions about what init will write —
 // build configurations, log forwarding, and the versioning scheme — prompting for
 // each. Nothing is created or written here.
-func gatherDriverShape(out io.Writer, proj project.Project, bundle []byte, version, entryRel string) (driverPlan, error) {
+func gatherDriverShape(out io.Writer, proj project.Project, bundle []byte, version, entryRel string, o initOpts) (driverPlan, error) {
 	dp := driverPlan{bundle: bundle, version: version, entryRel: entryRel}
 
 	// Build targets are opt-in; plain drivers carry no ENV system.
-	buildTargets, err := ui.Confirm("Set up build configurations (default/release)?",
-		fmt.Sprintf("Adds config.lua (your default, used by `driverforge build`) and config.release.lua for release builds (`driverforge build --configuration release`) — so each build can point at different endpoints (e.g. a local/dev device vs production). Skip if every build uses the same config — see %s", buildConfigDocsURL), false)
+	buildTargets, err := o.buildConfigs, error(nil)
+	if !o.buildConfigs && !o.noBuildConfigs {
+		buildTargets, err = ui.Confirm("Set up build configurations (default/release)?",
+			fmt.Sprintf("Adds config.lua (your default, used by `driverforge build`) and config.release.lua for release builds (`driverforge build --configuration release`) — so each build can point at different endpoints (e.g. a local/dev device vs production). Skip if every build uses the same config — see %s", buildConfigDocsURL), false)
+	}
 	if err != nil {
 		return driverPlan{}, err
 	}
@@ -122,9 +149,14 @@ func gatherDriverShape(out io.Writer, proj project.Project, bundle []byte, versi
 
 	// Detect an existing logger to forward; the SDK only forwards logs from a
 	// logger the driver passes to Driverforge:Init.
-	dp.logger, err = resolveLoggerGlobal(proj.SrcDir, entryRel)
-	if err != nil {
-		return driverPlan{}, err
+	switch {
+	case o.logger != "":
+		dp.logger = o.logger
+	case !o.noLogger:
+		dp.logger, err = resolveLoggerGlobal(proj.SrcDir, entryRel)
+		if err != nil {
+			return driverPlan{}, err
+		}
 	}
 	if dp.logger != "" {
 		fmt.Fprintln(out, ui.Success("Log forwarding: "+dp.logger))
@@ -134,7 +166,7 @@ func gatherDriverShape(out io.Writer, proj project.Project, bundle []byte, versi
 
 	// How driverforge bumps <version> (build --increment, every deploy). Detected from
 	// the authored value and confirmed — never silently converted.
-	dp.scheme, err = gatherVersioningScheme(out, proj)
+	dp.scheme, err = gatherVersioningScheme(out, proj, o.versioning)
 	if err != nil {
 		return driverPlan{}, err
 	}
@@ -189,104 +221,206 @@ const loggerDocsURL = "https://go.driverforge.com/logfwd"
 const buildConfigDocsURL = "https://go.driverforge.com/buildconfig"
 
 // newInitCmd retrofits an existing driver project for Driverforge: it embeds the SDK,
-// wraps OnDriverInit, links an Driverforge project, and (optionally) scaffolds build
-// targets — showing a diff for approval before writing anything.
+// wraps OnDriverInit, links or creates an Driverforge project, and (optionally)
+// scaffolds build targets — showing a diff for approval before writing anything.
+// Every question has a flag, so an agent or a script can run it too.
 func newInitCmd() *cobra.Command {
-	var projectRef string
+	var o initOpts
 	cmd := &cobra.Command{
 		Use:   "init",
 		Short: "Set up Driverforge in an existing driver project",
-		Args:  cobra.NoArgs,
+		Long: "Set up Driverforge in an existing driver project: embed the SDK, wrap\n" +
+			"OnDriverInit so events, errors and logs are captured, link or create the\n" +
+			"Driverforge project the driver reports to, and optionally add build\n" +
+			"configurations.\n\n" +
+			"In a terminal, init asks each question and shows the changes for approval;\n" +
+			"a flag answers its question instead. Without a terminal (a coding agent,\n" +
+			"CI, or --no-tui) every question needs its flag: preview the plan and its\n" +
+			"diffs with --dry-run, then apply it with --yes.",
+		Example: "  driverforge init\n" +
+			"  driverforge init --create-project \"Pool Pump\" --versioning date --no-build-configs \\\n" +
+			"      --logger Log --branch driverforge-init --dry-run\n" +
+			"  driverforge init --project acme/pool-pump --versioning date --no-build-configs \\\n" +
+			"      --no-logger --no-branch --yes",
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runInit(cmd.Context(), cmd.OutOrStdout(), flagProjectDir, projectRef)
+			o.commitMsgSet = cmd.Flags().Changed("commit-message")
+			doc, err := runInit(cmd.Context(), textOut(cmd), flagProjectDir, o)
+			if err != nil {
+				return err
+			}
+			return emit(cmd, doc, noText)
 		},
 	}
-	cmd.Flags().StringVar(&projectRef, "project", "", "link a specific project without prompting: <org-slug>/<project-slug> (or a project slug)")
+	f := cmd.Flags()
+	f.StringVar(&o.project, "project", "", "link an existing project: <org-slug>/<project-slug>, or a project slug")
+	f.StringVar(&o.createProject, "create-project", "", "create a project with this name for the driver to report to")
+	f.StringVar(&o.org, "org", "", "the organization to create the project in (default: the active one), or to qualify a --project slug")
+	f.StringVar(&o.platform, "platform", "", "the new project's platform, by id or name (default: the only supported one)")
+	f.StringVar(&o.description, "description", "", "the new project's description")
+	f.StringVar(&o.versioning, "versioning", "", "how deploys bump <version>: date (YYYYMMDDNN) or integer")
+	f.BoolVar(&o.buildConfigs, "build-configs", false, "add config.lua and config.release.lua build configurations")
+	f.BoolVar(&o.noBuildConfigs, "no-build-configs", false, "don't add build configurations")
+	f.StringVar(&o.logger, "logger", "", "forward logs from this logger global (e.g. Log)")
+	f.BoolVar(&o.noLogger, "no-logger", false, "don't forward the driver's logs")
+	f.StringVar(&o.branch, "branch", "", "create this git branch and commit the changes to it")
+	f.BoolVar(&o.noBranch, "no-branch", false, "write the changes to the current branch, uncommitted")
+	f.StringVar(&o.commitMsg, "commit-message", "", "the commit message on --branch (default \""+defaultInitCommitMessage+"\"; empty leaves the changes uncommitted)")
+	f.BoolVarP(&o.yes, "yes", "y", false, "apply without reviewing the changes")
+	f.BoolVar(&o.dryRun, "dry-run", false, "report the plan and its diffs without creating or writing anything")
 	return cmd
 }
 
 // runInit sets a project up exactly once: it always embeds the newest Anvil
 // SDK (cached copy first). Updating the SDK afterwards is the `driverforge
 // upgrade` picker — init never mutates an already-initialised project.
-func runInit(ctx context.Context, out io.Writer, projectDir, projectRef string) error {
-	proj, done, err := initPreflight(ctx, out, projectDir)
-	if err != nil || done {
-		return err
+func runInit(ctx context.Context, out io.Writer, projectDir string, o initOpts) (initOut, error) {
+	doc := newInitOut()
+	doc.DryRun = o.dryRun
+	if err := o.validate(); err != nil {
+		return doc, err
 	}
-
-	fmt.Fprintf(out, "\n%s", ui.InitIntro())
-
-	// Resolve and cache the SDK bundle to embed (newest cached, else latest).
-	bundle, version, err := loadSDK(ctx, out)
+	proj, cfg, err := initPreflight(ctx, out, projectDir, o)
 	if err != nil {
-		return err
+		return doc, err
 	}
-
-	entryRel, err := initdriver.EntryFile(proj.SrcDir)
-	if err != nil {
-		return err
+	if cfg != nil {
+		return alreadySetUpOut(doc, cfg), nil
 	}
 
 	cl := driverforgeapi.New()
 
 	// --- Gather: collect every decision without changing anything ---
-	org, pp, err := gatherOrgAndProject(ctx, out, cl, projectRef)
+	g, err := gatherInit(ctx, out, cl, proj, o)
 	if err != nil {
-		return err
+		return doc, err
 	}
-
-	dp, err := gatherDriverShape(out, proj, bundle, version, entryRel)
-	if err != nil {
-		return err
-	}
-
-	branch, commitMsg, err := gatherBranchIntent(ctx, out, proj.Dir, "driverforge-init", defaultInitCommitMessage)
-	if err != nil {
-		return err
-	}
+	doc.Org = initOrgOut{Slug: g.org.Slug, Name: g.org.Name}
+	doc.setProject(g.pp, nil)
+	doc.SDKVersion, doc.Versioning, doc.Logger = g.dp.version, g.dp.scheme, g.dp.logger
+	doc.BuildConfigs = g.dp.buildTargets
+	doc.Branch, doc.CommitMessage = g.branch, g.commitMsg
 
 	// --- Build the change set for review (placeholder key/project; nothing is
 	// created until the user confirms) ---
-	reviewPlan, err := buildInitChanges(proj, dp, org, pp.reviewProject(), pp.reviewToken())
+	reviewPlan, err := buildInitChanges(proj, g.dp, g.org, g.pp.reviewProject(), g.pp.reviewToken())
 	if err != nil {
-		return err
+		return doc, err
+	}
+	doc.setChanges(reviewPlan.Changes)
+	for _, w := range reviewPlan.Warnings {
+		doc.Warnings = append(doc.Warnings, warning{Code: codeWarning, Message: w})
 	}
 	if reviewPlan.Empty() {
 		fmt.Fprintln(out, "\nThis project is already set up for Driverforge — nothing to change.")
-		return nil
+		return doc, nil
 	}
 
-	// --- Review the code changes (a step in the recipe; still nothing written).
-	// The SDK bundle is excluded — it's a vendored blob, visible in git; the
-	// review is about what we change in the user's own files. ---
-	reviewable, sdkEmbedded := reviewableChanges(reviewPlan.Changes)
-	accepted, err := reviewCodeChanges(ctx, out, reviewPlan.Warnings, reviewable)
-	if err != nil {
-		return err
-	}
-	if !accepted {
-		fmt.Fprintln(out, "\nNo changes made.")
-		return clierr.Silent()
-	}
-	fmt.Fprintln(out, ui.Success(fmt.Sprintf("Code changes: %d file%s", len(reviewable), plural(len(reviewable)))))
-
-	// --- Final confirmation of the whole plan (still nothing written) ---
-	ok, err := confirmPlan(out, pp, dp.buildTargets, branch, commitMsg, len(reviewable), sdkEmbedded)
-	if err != nil {
-		return err
-	}
-	if !ok {
-		fmt.Fprintln(out, "\nNo changes made.")
-		return clierr.Silent()
+	if apply, err := approveInit(ctx, out, o, g, reviewPlan); err != nil || !apply {
+		return doc, err
 	}
 
 	// --- Execute the confirmed plan with a live progress list ---
-	if err := executeInit(ctx, out, proj, cl, org, pp, dp, branch, commitMsg); err != nil {
-		return err
+	linked, written, err := executeInit(ctx, out, proj, cl, g.org, g.pp, g.dp, g.branch, g.commitMsg)
+	if err != nil {
+		return doc, err
+	}
+	doc.Applied = true
+	doc.setProject(g.pp, &linked)
+	doc.setChanges(written)
+
+	printCelebration(out, g.dp.buildTargets)
+	return doc, nil
+}
+
+// alreadySetUpOut reports a project init has already set up.
+func alreadySetUpOut(doc initOut, cfg *driverforgeconfig.Config) initOut {
+	doc.AlreadySetUp = true
+	doc.Org = initOrgOut{Slug: cfg.Org}
+	doc.Project = initProjectOut{Action: "link", Slug: cfg.Project.Slug, Name: cfg.Project.Name}
+	doc.SDKVersion, doc.Versioning, doc.Logger = cfg.SDKVersion, cfg.Versioning, cfg.Logger
+	doc.BuildConfigs = len(cfg.BuildTargets) > 0
+	return doc
+}
+
+// initDecisions is everything init gathered before building the change set.
+type initDecisions struct {
+	org       orgctx.Org
+	pp        projectPlan
+	dp        driverPlan
+	branch    string
+	commitMsg string
+}
+
+// gatherInit collects every decision, from flags or by asking. Without a
+// terminal, a missing flag fails here before anything touches the network.
+func gatherInit(ctx context.Context, out io.Writer, cl *driverforgeapi.Client, proj project.Project, o initOpts) (initDecisions, error) {
+	var g initDecisions
+	entryRel, err := initdriver.EntryFile(proj.SrcDir)
+	if err != nil {
+		return g, err
+	}
+	if !ui.Interactive(flagNoTUI) {
+		if missing, detected := o.missingAnswers(ctx, proj, entryRel); len(missing) > 0 {
+			return g, inputRequired(missing, detected)
+		}
+	} else {
+		fmt.Fprintf(out, "\n%s", ui.InitIntro())
 	}
 
-	printCelebration(out, dp.buildTargets)
-	return nil
+	// Resolve and cache the SDK bundle to embed (newest cached, else latest).
+	bundle, version, err := loadSDK(ctx, out)
+	if err != nil {
+		return g, err
+	}
+	if g.org, g.pp, err = gatherOrgAndProject(ctx, out, cl, o); err != nil {
+		return g, err
+	}
+	if g.dp, err = gatherDriverShape(out, proj, bundle, version, entryRel, o); err != nil {
+		return g, err
+	}
+	g.branch, g.commitMsg, err = initBranchIntent(ctx, out, proj.Dir, o)
+	return g, err
+}
+
+// approveInit decides whether to apply the plan: a dry run prints it and
+// stops, --yes applies it, and otherwise the user reviews the code changes and
+// confirms the whole plan. Nothing has been written when it returns.
+func approveInit(ctx context.Context, out io.Writer, o initOpts, g initDecisions, plan *initdriver.Result) (bool, error) {
+	// The SDK bundle is excluded from review — it's a vendored blob, visible
+	// in git; the review is about what we change in the user's own files.
+	reviewable, sdkEmbedded := reviewableChanges(plan.Changes)
+	summary := func() {
+		printPlan(out, g.pp, g.dp.buildTargets, g.branch, g.commitMsg, len(reviewable), sdkEmbedded)
+	}
+	switch {
+	case o.dryRun:
+		printDryRun(out, plan.Warnings, reviewable)
+		summary()
+		fmt.Fprintln(out, "\nDry run: nothing was created or written. Re-run with --yes to apply.")
+		return false, nil
+	case o.yes:
+		return true, nil
+	}
+
+	accepted, err := reviewCodeChanges(ctx, out, plan.Warnings, reviewable)
+	if err != nil {
+		return false, err
+	}
+	if accepted {
+		fmt.Fprintln(out, ui.Success(fmt.Sprintf("Code changes: %d file%s", len(reviewable), plural(len(reviewable)))))
+		// --- Final confirmation of the whole plan (still nothing written) ---
+		summary()
+		accepted, err = ui.Confirm("Apply this plan?", "Nothing has changed yet — this links/creates the project and writes the files.", true)
+		if err != nil {
+			return false, err
+		}
+	}
+	if !accepted {
+		fmt.Fprintln(out, "\nNo changes made.")
+		return false, clierr.Silent()
+	}
+	return true, nil
 }
 
 // newProjectTokenPlaceholder stands in for a token that does not exist yet: when
