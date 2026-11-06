@@ -40,12 +40,14 @@ const (
 	CodeNotInProject = "not_in_project"
 )
 
-// ErrFingerprintMismatch marks a refused connection because the controller
-// presented a TLS certificate that doesn't match the pinned fingerprint (e.g.
-// the agent was reinstalled with a fresh self-signed cert). It's wrapped inside
-// the friendly UserError pinnedFingerprint returns, so callers can errors.Is it
-// to self-heal (re-fetch the fingerprint) before surfacing the error.
-var ErrFingerprintMismatch = errors.New("agent: controller certificate fingerprint mismatch")
+// ErrKeyMismatch marks a refused connection because the controller presented
+// a TLS certificate whose public key doesn't match the pinned one: the agent
+// was re-enrolled with a new key (a reset controller, a reinstall that lost
+// its key), or something else is answering at that address. A certificate
+// reissued for the same key still matches. It's wrapped inside the friendly
+// UserError pinnedKey returns, so callers can errors.Is it to re-fetch the pin
+// before surfacing the error.
+var ErrKeyMismatch = errors.New("agent: controller public key mismatch")
 
 // Error is a structured agent error carrying the machine code so callers can
 // branch (e.g. needs_deploy → escalate to a full deploy).
@@ -81,17 +83,19 @@ type Client struct {
 }
 
 // New returns a client for baseURL (e.g. https://192.168.1.10:9443). The
-// controller serves a self-signed cert on a DHCP IP, so we can't verify a
-// CA/hostname; instead we pin the leaf certificate's SHA-256 fingerprint. When
-// fingerprint is empty, DRIVERFORGE_AGENT_INSECURE=1 skips verification entirely (dev
-// only); otherwise the default transport applies (callers refuse before here).
-func New(baseURL, fingerprint string) *Client {
+// controller is on a DHCP IP, so there's no hostname to verify; instead we pin
+// the SHA-256 of the leaf certificate's public key (its DER
+// SubjectPublicKeyInfo). The key is generated once on the controller, so the
+// pin survives the certificate being reissued. When keyPin is empty,
+// DRIVERFORGE_AGENT_INSECURE=1 skips verification entirely (dev only);
+// otherwise the default transport applies (callers refuse before here).
+func New(baseURL, keyPin string) *Client {
 	tr := &http.Transport{}
 	switch {
-	case fingerprint != "":
+	case keyPin != "":
 		tr.TLSClientConfig = &tls.Config{
 			InsecureSkipVerify:    true, // we pin instead of CA/hostname verification
-			VerifyPeerCertificate: pinnedFingerprint(fingerprint),
+			VerifyPeerCertificate: pinnedKey(keyPin),
 		}
 	case os.Getenv("DRIVERFORGE_AGENT_INSECURE") != "":
 		tr.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
@@ -102,26 +106,41 @@ func New(baseURL, fingerprint string) *Client {
 	}
 }
 
-// pinnedFingerprint verifies the server's leaf certificate's SHA-256 fingerprint
-// matches expected. It runs even with InsecureSkipVerify, which is the standard
-// certificate-pinning pattern.
-func pinnedFingerprint(expected string) func([][]byte, [][]*x509.Certificate) error {
+// KeyPin is the pin for a DER certificate: the SHA-256 of its
+// SubjectPublicKeyInfo, lowercase hex.
+func KeyPin(der []byte) (string, error) {
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		return "", fmt.Errorf("agent: parsing the controller's certificate: %w", err)
+	}
+	sum := sha256.Sum256(cert.RawSubjectPublicKeyInfo)
+	return hex.EncodeToString(sum[:]), nil
+}
+
+// pinnedKey verifies the server's leaf certificate carries the pinned public
+// key. The TLS handshake has already proved the server holds the matching
+// private key; this checks it's the key we expect. It runs even with
+// InsecureSkipVerify, which is the standard pinning pattern.
+func pinnedKey(expected string) func([][]byte, [][]*x509.Certificate) error {
 	want := normalizeFingerprint(expected)
 	return func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
 		if len(rawCerts) == 0 {
 			return fmt.Errorf("agent: server presented no certificate")
 		}
-		sum := sha256.Sum256(rawCerts[0]) // leaf, DER-encoded
-		if !strings.EqualFold(hex.EncodeToString(sum[:]), want) {
-			// Anticipated, user-facing condition (the controller's cert rotated):
-			// a friendly UserError so it isn't reported as a crash. It survives
-			// net/http + TLS wrapping via errors.As at the top level.
+		got, err := KeyPin(rawCerts[0]) // leaf
+		if err != nil {
+			return err
+		}
+		if !strings.EqualFold(got, want) {
+			// Anticipated, user-facing condition: a friendly UserError so it
+			// isn't reported as a crash. It survives net/http + TLS wrapping
+			// via errors.As at the top level.
 			return &clierr.UserError{
 				Code:    clierr.CodeCertificateChanged,
-				Title:   "Controller certificate changed",
-				Message: "the controller's TLS certificate doesn't match the pinned fingerprint — refusing to connect",
-				Hint:    "re-run `driverforge device select` if the controller's certificate changed",
-				Err:     ErrFingerprintMismatch,
+				Title:   "Controller key changed",
+				Message: "the controller's TLS key doesn't match the one Driverforge has on record — refusing to connect",
+				Hint:    "if the controller was reset or the Anvil agent reinstalled, reload the agent so it registers again, then retry",
+				Err:     ErrKeyMismatch,
 			}
 		}
 		return nil

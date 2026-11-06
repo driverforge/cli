@@ -134,42 +134,42 @@ func TestListDevices(t *testing.T) {
 	}
 }
 
-func TestDeviceFingerprint(t *testing.T) {
+func TestDeviceKeyPin(t *testing.T) {
 	stubLogin(t)
 	var gotBody string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
 		gotBody = string(b)
 		w.Header().Set("Content-Type", "application/json")
-		io.WriteString(w, `{"data":{"device":{"deviceId":"00:0D:6F:AB:12:34","certFingerprint":"sha256:abc123"}}}`)
+		io.WriteString(w, `{"data":{"device":{"deviceId":"00:0D:6F:AB:12:34","publicKeyPin":"sha256:abc123"}}}`)
 	}))
 	defer srv.Close()
 	t.Setenv("DRIVERFORGE_GRAPH_URL", srv.URL)
 
-	fp, err := New().DeviceFingerprint(context.Background(), "00:0D:6F:AB:12:34")
+	fp, err := New().DeviceKeyPin(context.Background(), "00:0D:6F:AB:12:34")
 	if err != nil {
-		t.Fatalf("DeviceFingerprint: %v", err)
+		t.Fatalf("DeviceKeyPin: %v", err)
 	}
 	if fp != "sha256:abc123" {
 		t.Errorf("fingerprint = %q, want sha256:abc123", fp)
 	}
-	if !strings.Contains(gotBody, "00:0D:6F:AB:12:34") || !strings.Contains(gotBody, "certFingerprint") {
+	if !strings.Contains(gotBody, "00:0D:6F:AB:12:34") || !strings.Contains(gotBody, "publicKeyPin") {
 		t.Errorf("request didn't carry deviceId/field: %s", gotBody)
 	}
 }
 
-func TestDeviceFingerprintNull(t *testing.T) {
+func TestDeviceKeyPinNull(t *testing.T) {
 	stubLogin(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		io.WriteString(w, `{"data":{"device":{"deviceId":"MAC","certFingerprint":null}}}`)
+		io.WriteString(w, `{"data":{"device":{"deviceId":"MAC","publicKeyPin":null}}}`)
 	}))
 	defer srv.Close()
 	t.Setenv("DRIVERFORGE_GRAPH_URL", srv.URL)
 
-	fp, err := New().DeviceFingerprint(context.Background(), "MAC")
+	fp, err := New().DeviceKeyPin(context.Background(), "MAC")
 	if err != nil || fp != "" {
-		t.Errorf("null certFingerprint should yield (\"\", nil), got (%q, %v)", fp, err)
+		t.Errorf("null publicKeyPin should yield (\"\", nil), got (%q, %v)", fp, err)
 	}
 }
 

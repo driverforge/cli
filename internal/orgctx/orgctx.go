@@ -49,13 +49,13 @@ type Org struct {
 // Hostname/IP are cached so deploy/sync can reach the controller's agent without
 // a graph round-trip (refresh via `driverforge device select` if the address changes).
 type Device struct {
-	ID             string `json:"id"`
-	Name           string `json:"name"`
-	OrgID          string `json:"orgId"`
-	DeviceID       string `json:"deviceId,omitempty"` // hardware id / MAC, for re-querying the fingerprint
-	Hostname       string `json:"hostname,omitempty"`
-	IP             string `json:"ip,omitempty"`
-	TLSFingerprint string `json:"tlsFingerprint,omitempty"` // pinned deploy-server cert fingerprint
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	OrgID       string `json:"orgId"`
+	DeviceID    string `json:"deviceId,omitempty"` // hardware id / MAC, for re-querying the key pin
+	Hostname    string `json:"hostname,omitempty"`
+	IP          string `json:"ip,omitempty"`
+	AgentKeyPin string `json:"agentKeyPin,omitempty"` // SHA-256 of the agent's TLS public key (SPKI)
 }
 
 // Context is the on-disk org context.

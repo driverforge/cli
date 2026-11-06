@@ -255,22 +255,23 @@ func nullableName(name string) any {
 	return name
 }
 
-const deviceFingerprintQuery = `query($deviceId: String!) { device(deviceId: $deviceId) { deviceId certFingerprint } }`
+const deviceKeyPinQuery = `query($deviceId: String!) { device(deviceId: $deviceId) { deviceId publicKeyPin } }`
 
-// DeviceFingerprint returns the controller's pinned TLS certificate fingerprint
-// for the given hardware device id (MAC), or "" if the device exists but hasn't
-// completed cert registration (certFingerprint is null).
-func (c *Client) DeviceFingerprint(ctx context.Context, deviceID string) (string, error) {
+// DeviceKeyPin returns the pin for the controller's agent: the SHA-256 of its
+// TLS public key (DER SubjectPublicKeyInfo), for the given hardware device id
+// (MAC). It's "" when the device exists but hasn't completed certificate
+// registration. The key survives certificate reissues, so the pin does too.
+func (c *Client) DeviceKeyPin(ctx context.Context, deviceID string) (string, error) {
 	var data struct {
 		Device struct {
-			DeviceID        string `json:"deviceId"`
-			CertFingerprint string `json:"certFingerprint"`
+			DeviceID     string `json:"deviceId"`
+			PublicKeyPin string `json:"publicKeyPin"`
 		} `json:"device"`
 	}
-	if err := c.do(ctx, deviceFingerprintQuery, map[string]any{"deviceId": deviceID}, &data); err != nil {
+	if err := c.do(ctx, deviceKeyPinQuery, map[string]any{"deviceId": deviceID}, &data); err != nil {
 		return "", err
 	}
-	return data.Device.CertFingerprint, nil
+	return data.Device.PublicKeyPin, nil
 }
 
 // Project is a Driverforge project: the thing a driver reports telemetry under.

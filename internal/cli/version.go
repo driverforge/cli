@@ -141,8 +141,8 @@ func controllerRows(ctx context.Context, dev orgctx.Device) (name string, rows [
 	unreachable := []ui.VersionRow{{Label: "Anvil Agent", Value: "unreachable"}}
 	h, err := probeController(ctx, dev)
 	if err != nil {
-		if errors.Is(err, agent.ErrFingerprintMismatch) {
-			return dev.Name, []ui.VersionRow{{Label: "Anvil Agent", Value: "TLS certificate mismatch"}}
+		if errors.Is(err, agent.ErrKeyMismatch) {
+			return dev.Name, []ui.VersionRow{{Label: "Anvil Agent", Value: "TLS key mismatch"}}
 		}
 		return dev.Name, unreachable
 	}
@@ -268,7 +268,7 @@ func versionReport(ctx context.Context) versionOut {
 			h, err := probeController(ctx, dev)
 			c := &controllerVersionOut{Device: deviceRefOf(dev, h), Status: "ok"}
 			switch {
-			case errors.Is(err, agent.ErrFingerprintMismatch):
+			case errors.Is(err, agent.ErrKeyMismatch):
 				c.Status = "certificate_mismatch"
 			case err != nil:
 				c.Status = "unreachable"

@@ -92,7 +92,7 @@ squishy ──────────┘                       ▶ encrypt (opt
 
 **Local state** (under the OS config dir, e.g. macOS `~/Library/Application Support/driverforge/`):
 - `credentials.json` *(or OS keychain)* — tokens
-- `context.json` — selected org + device (host/IP + pinned cert fingerprint cached for reachability)
+- `context.json` — selected org + device (host/IP + the agent's pinned public key, cached for reachability)
 - `config.json` — anonymous id + telemetry consent
 - `sdk/<version>/driverforge-sdk.lua` — cached SDK bundles (local-first; see §6)
 
@@ -156,8 +156,9 @@ that it appears as a deployable target at all.
 
 **Deploy server (the CLI's local endpoint)** — a network ingress for *remote code execution* on the
 controller, so it is locked down:
-- **HTTPS** with the controller's **self-signed cert**; the CLI **pins** the fingerprint it fetched
-  from the Graph (no PKI required).
+- **HTTPS** with a certificate the Graph issues for the controller's key; the CLI **pins the
+  public key** (SHA-256 of its SubjectPublicKeyInfo) it fetched from the Graph, not the
+  certificate, so the frequent certificate reissues don't change the pin.
 - Every `/deploy` / `/sync` request carries a **bearer OAuth token**; the Agent verifies it (JWKS,
   RS256) and requires the token's `sub` to **match the Agent's own logged-in user**.
 - A Composer **"Deploy Server" off** kill-switch disables the ingress entirely.
@@ -184,10 +185,10 @@ Entitlements gate project creation during `init`.
 | `myProjects` | query | `init` (project picker; carries each project's token) |
 | `createProject` | mutation | `init` (create-new flow; returns the new project's token) — entitlement-gated (`canCreateProject`) |
 | `deployableDevices(organizationId)` | query | `device list/select`, deploy targeting |
-| `device(deviceId){ certFingerprint }` | query | deploy/sync (pin the controller's TLS cert) |
+| `device(deviceId){ publicKeyPin }` | query | deploy/sync (pin the controller's TLS key) |
 
 Controllers reach `deployableDevices` by registering themselves: the Agent publishes its identity
-and certificate fingerprint to the Graph, and re-registers on IP change so the CLI keeps targeting
+and key (as a certificate request) to the Graph, and re-registers on IP change so the CLI keeps targeting
 the right host. Nothing in the CLI drives that — it only reads the result.
 
 `init` writes the project's token into the driver, which is how its telemetry is attributed to the
@@ -246,8 +247,9 @@ user identities; **JWKS** (RS256) is the shared verification anchor.
   credentials.
 - **JWT verification everywhere it matters** — the Agent's deploy server and the MQTT broker both
   verify RS256 JWTs against cached JWKS (forced refresh on validation failure).
-- **Cert pinning instead of PKI** — the controller's self-signed cert fingerprint is published to the
-  Graph at registration and pinned by the CLI for every upload.
+- **Key pinning instead of PKI** — the controller's public key is published to the Graph at
+  registration and pinned by the CLI for every upload. The key outlives every certificate issued
+  for it.
 - **Identity binding** — a deploy request's token `sub` must match the Agent's own logged-in user, so
   a stray token from elsewhere can't push code to the controller.
 
@@ -285,8 +287,8 @@ sequenceDiagram
   participant D as Director / driver
 
   CLI->>CLI: build .c4z (pkg/c4z)
-  CLI->>G: device(deviceId){ certFingerprint }
-  G-->>CLI: pinned cert fingerprint
+  CLI->>G: device(deviceId){ publicKeyPin }
+  G-->>CLI: pinned public key
   CLI->>A: GET /healthz (capabilities, versions)
   CLI->>A: POST /deploy (.c4z, Bearer token, pinned TLS)
   A->>A: verify JWT (sub == logged-in user)

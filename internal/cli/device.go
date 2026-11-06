@@ -480,10 +480,10 @@ func applyDevice(ctx context.Context, out io.Writer, orgID string, d driverforge
 
 func persistDevice(ctx context.Context, out io.Writer, orgID string, d driverforgeapi.Device) (orgctx.Device, error) {
 	od := orgctx.Device{ID: d.ID, Name: d.DisplayName(), OrgID: orgID, DeviceID: d.DeviceID, Hostname: d.Hostname, IP: d.IP}
-	// Cache the controller's pinned TLS fingerprint now (best-effort); the
-	// connect path refetches/refuses if it's still unavailable.
-	if fp, err := driverforgeapi.New().DeviceFingerprint(ctx, d.DeviceID); err == nil {
-		od.TLSFingerprint = fp
+	// Cache the agent's key pin now (best-effort); the connect path
+	// refetches/refuses if it's still unavailable.
+	if pin, err := driverforgeapi.New().DeviceKeyPin(ctx, d.DeviceID); err == nil {
+		od.AgentKeyPin = pin
 	}
 	if err := orgctx.SetCurrentDevice(od); err != nil {
 		return orgctx.Device{}, fmt.Errorf("saving device: %w", err)

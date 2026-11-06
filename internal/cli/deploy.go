@@ -505,7 +505,7 @@ func resolveSelfDeploy(ctx context.Context, cl *agent.Client, dev orgctx.Device,
 		cl, h, err = healthWithPinRecovery(ctx, cl, dev)
 		if err == nil {
 			certificateMismatch = false
-		} else if errors.Is(err, agent.ErrFingerprintMismatch) {
+		} else if errors.Is(err, agent.ErrKeyMismatch) {
 			certificateMismatch = true
 		}
 		if err == nil && h.AgentVersion != "" && h.AgentVersion != oldAgentVersion {
@@ -558,11 +558,11 @@ func driverVersionFromC4z(c4zPath string) string {
 }
 
 // dialAgent builds a deploy-server client for dev and confirms it with a health
-// probe, self-healing a stale pinned TLS fingerprint. If the controller presents
-// a certificate that doesn't match the cached fingerprint — the realistic case
-// where the agent was deleted and reinstalled with a fresh self-signed cert — it
-// silently re-fetches the fingerprint from the graph (where the agent re-attests
-// on install), persists it, and retries once. Callers get the (possibly rebuilt)
+// probe, self-healing a stale key pin. A reissued certificate keeps its key, so
+// the pin only goes stale when the agent is re-enrolled with a new key (a reset
+// controller, or a reinstall that lost its key). Then it re-fetches the pin from
+// the graph (where the agent registers its new key), persists it, and retries
+// once. Callers get the (possibly rebuilt)
 // client and its health, so later requests reuse the healed connection.
 func dialAgent(ctx context.Context, dev orgctx.Device) (*agent.Client, agent.Health, error) {
 	cl, err := agentForDevice(ctx, dev)
@@ -576,23 +576,23 @@ func dialAgent(ctx context.Context, dev orgctx.Device) (*agent.Client, agent.Hea
 // a failed refresh, and persist the replacement only after it verifies health.
 func healthWithPinRecovery(ctx context.Context, cl *agent.Client, dev orgctx.Device) (*agent.Client, agent.Health, error) {
 	h, herr := cl.Health(ctx)
-	if herr == nil || !errors.Is(herr, agent.ErrFingerprintMismatch) || dev.DeviceID == "" {
+	if herr == nil || !errors.Is(herr, agent.ErrKeyMismatch) || dev.DeviceID == "" {
 		return cl, h, herr
 	}
-	fp, ferr := driverforgeapi.New().DeviceFingerprint(ctx, dev.DeviceID)
-	if ferr != nil || fp == "" {
+	pin, ferr := driverforgeapi.New().DeviceKeyPin(ctx, dev.DeviceID)
+	if ferr != nil || pin == "" || pin == dev.AgentKeyPin {
 		return cl, h, herr
 	}
 	addr, ok := agentAddr(dev)
 	if !ok {
 		return cl, h, herr
 	}
-	refreshed := agent.New("https://"+addr, fp)
+	refreshed := agent.New("https://"+addr, pin)
 	h, err := refreshed.Health(ctx)
 	if err != nil {
 		return cl, h, herr
 	}
-	persistFingerprint(dev, fp)
+	persistKeyPin(dev, pin)
 	return refreshed, h, nil
 }
 
@@ -614,38 +614,38 @@ func agentForDevice(ctx context.Context, dev orgctx.Device) (*agent.Client, erro
 			"re-select it with `driverforge device select`"), codeAgentUnreachable)
 	}
 
-	// Resolve the pinned TLS fingerprint: cached, else fetch by hardware id
-	// (e.g. the cert was registered after selection) and persist it so later
+	// Resolve the agent's key pin: cached, else fetch by hardware id (e.g. the
+	// agent registered after selection) and persist it so later
 	// deploy/sync/upgrade/health probes don't repeat the graph round-trip.
-	fp := dev.TLSFingerprint
-	if fp == "" && dev.DeviceID != "" {
-		if v, err := driverforgeapi.New().DeviceFingerprint(ctx, dev.DeviceID); err == nil && v != "" {
-			fp = v
-			persistFingerprint(dev, fp)
+	pin := dev.AgentKeyPin
+	if pin == "" && dev.DeviceID != "" {
+		if v, err := driverforgeapi.New().DeviceKeyPin(ctx, dev.DeviceID); err == nil && v != "" {
+			pin = v
+			persistKeyPin(dev, pin)
 		}
 	}
-	if fp == "" && os.Getenv("DRIVERFORGE_AGENT_INSECURE") == "" {
+	if pin == "" && os.Getenv("DRIVERFORGE_AGENT_INSECURE") == "" {
 		return nil, clierr.WithCode(clierr.User(
-			fmt.Sprintf("no TLS certificate fingerprint on record for %s — the controller may not have finished registration", dev.Name),
+			fmt.Sprintf("no agent key on record for %s — the controller may not have finished registration", dev.Name),
 			"re-run `driverforge device select` once it's active (or set DRIVERFORGE_AGENT_INSECURE=1 for local testing)"), codeCertificateChanged)
 	}
 
-	return agent.New("https://"+addr, fp), nil
+	return agent.New("https://"+addr, pin), nil
 }
 
-// persistFingerprint caches a freshly-fetched TLS fingerprint back onto the
-// selected device, but only when dev IS the current device — so a probe against
-// a --device-specified other controller never overwrites the wrong record.
+// persistKeyPin caches a freshly-fetched agent key pin back onto the selected
+// device, but only when dev IS the current device — so a probe against a
+// --device-specified other controller never overwrites the wrong record.
 // Best-effort: a failed save just means the next call re-fetches.
-func persistFingerprint(dev orgctx.Device, fp string) {
+func persistKeyPin(dev orgctx.Device, pin string) {
 	cur, err := orgctx.CurrentDevice()
 	if err != nil || cur.ID != dev.ID {
 		return
 	}
-	if cur.TLSFingerprint == fp {
+	if cur.AgentKeyPin == pin {
 		return
 	}
-	cur.TLSFingerprint = fp
+	cur.AgentKeyPin = pin
 	_ = orgctx.SetCurrentDevice(cur)
 }
 

@@ -2,11 +2,15 @@ package agent
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"io"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -17,7 +21,7 @@ import (
 	"github.com/driverforge/cli/internal/clierr"
 )
 
-func TestFingerprintMismatchIsDetectable(t *testing.T) {
+func TestKeyMismatchIsDetectable(t *testing.T) {
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		io.WriteString(w, `{"ok":true}`)
 	}))
@@ -25,11 +29,11 @@ func TestFingerprintMismatchIsDetectable(t *testing.T) {
 
 	_, err := New(srv.URL, strings.Repeat("ab", 32)).Health(context.Background())
 	if err == nil {
-		t.Fatal("wrong fingerprint must be refused")
+		t.Fatal("wrong key pin must be refused")
 	}
 	// The sentinel must survive net/http + TLS wrapping so callers can self-heal.
-	if !errors.Is(err, ErrFingerprintMismatch) {
-		t.Errorf("mismatch should be errors.Is ErrFingerprintMismatch, got %v", err)
+	if !errors.Is(err, ErrKeyMismatch) {
+		t.Errorf("mismatch should be errors.Is ErrKeyMismatch, got %v", err)
 	}
 	// It must also remain a friendly UserError (never reported as a crash).
 	if !clierr.IsUser(err) {
@@ -37,22 +41,58 @@ func TestFingerprintMismatchIsDetectable(t *testing.T) {
 	}
 }
 
-func TestFingerprintPinning(t *testing.T) {
+func TestKeyPinning(t *testing.T) {
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		io.WriteString(w, `{"ok":true,"capabilities":["sync"]}`)
 	}))
 	defer srv.Close()
-	sum := sha256.Sum256(srv.Certificate().Raw) // the leaf the server presents
+	sum := sha256.Sum256(srv.Certificate().RawSubjectPublicKeyInfo) // the leaf's key
 	good := hex.EncodeToString(sum[:])
 
 	if _, err := New(srv.URL, good).Health(context.Background()); err != nil {
-		t.Fatalf("matching fingerprint should connect: %v", err)
+		t.Fatalf("matching key pin should connect: %v", err)
 	}
 	if _, err := New(srv.URL, "sha256:"+strings.ToUpper(good)).Health(context.Background()); err != nil {
-		t.Errorf("prefixed/upper fingerprint should match: %v", err)
+		t.Errorf("prefixed/upper key pin should match: %v", err)
 	}
 	if _, err := New(srv.URL, strings.Repeat("ab", 32)).Health(context.Background()); err == nil {
-		t.Error("wrong fingerprint must be refused")
+		t.Error("wrong key pin must be refused")
+	}
+	// The pin is the key, not the certificate: the whole-certificate hash the
+	// CLI used to pin must not match.
+	whole := sha256.Sum256(srv.Certificate().Raw)
+	if _, err := New(srv.URL, hex.EncodeToString(whole[:])).Health(context.Background()); err == nil {
+		t.Error("a certificate fingerprint must not satisfy a key pin")
+	}
+}
+
+// A certificate reissued for the same key (what renewal does) still matches
+// the pin, so a renewal never breaks the connection.
+func TestKeyPinSurvivesReissue(t *testing.T) {
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		io.WriteString(w, `{"ok":true}`)
+	}))
+	srv.StartTLS()
+	defer srv.Close()
+	pin, err := KeyPin(srv.Certificate().Raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	orig := srv.TLS.Certificates[0]
+	tmpl := *srv.Certificate()
+	tmpl.SerialNumber = big.NewInt(2)
+	tmpl.NotBefore = time.Now().Add(-time.Minute)
+	der, err := x509.CreateCertificate(rand.Reader, &tmpl, &tmpl, tmpl.PublicKey, orig.PrivateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reissued := tls.Certificate{Certificate: [][]byte{der}, PrivateKey: orig.PrivateKey}
+	srv.TLS.Certificates = nil
+	srv.TLS.GetCertificate = func(*tls.ClientHelloInfo) (*tls.Certificate, error) { return &reissued, nil }
+
+	if _, err := New(srv.URL, pin).Health(context.Background()); err != nil {
+		t.Errorf("a reissued certificate for the same key should still match: %v", err)
 	}
 }
 

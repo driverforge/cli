@@ -3,8 +3,6 @@ package cli
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -63,20 +61,22 @@ func TestAgentUnreachableErrSurfacesUserErrorCause(t *testing.T) {
 	}
 }
 
-func TestDialAgentRefreshesStaleFingerprint(t *testing.T) {
+func TestDialAgentRefreshesStaleKeyPin(t *testing.T) {
 	// A TLS "agent" that answers /healthz.
 	agentSrv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		io.WriteString(w, `{"ok":true,"agentVersion":"1.2.3","capabilities":["deploy"]}`)
 	}))
 	defer agentSrv.Close()
-	sum := sha256.Sum256(agentSrv.Certificate().Raw)
-	realFP := hex.EncodeToString(sum[:])
+	realFP, err := agent.KeyPin(agentSrv.Certificate().Raw)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	// The graph returns the agent's ACTUAL fingerprint for the device — the state
-	// after the agent was reinstalled and re-attested its new cert.
+	// The graph returns the agent's ACTUAL key pin for the device — the state
+	// after the agent was re-enrolled with a new key.
 	graphSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"data":{"device":{"deviceId":"MAC1","certFingerprint":%q}}}`, realFP)
+		fmt.Fprintf(w, `{"data":{"device":{"deviceId":"MAC1","publicKeyPin":%q}}}`, realFP)
 	}))
 	defer graphSrv.Close()
 
@@ -95,7 +95,7 @@ func TestDialAgentRefreshesStaleFingerprint(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Cached with a STALE (wrong) fingerprint but a known DeviceID → self-heal.
-	dev := orgctx.Device{ID: "d1", Name: "Ctrl", OrgID: "o1", DeviceID: "MAC1", IP: u.Hostname(), TLSFingerprint: strings.Repeat("ab", 32)}
+	dev := orgctx.Device{ID: "d1", Name: "Ctrl", OrgID: "o1", DeviceID: "MAC1", IP: u.Hostname(), AgentKeyPin: strings.Repeat("ab", 32)}
 	if err := orgctx.SetCurrentDevice(dev); err != nil {
 		t.Fatal(err)
 	}
@@ -112,8 +112,8 @@ func TestDialAgentRefreshesStaleFingerprint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.TLSFingerprint != realFP {
-		t.Errorf("refreshed fingerprint not persisted: got %q want %q", got.TLSFingerprint, realFP)
+	if got.AgentKeyPin != realFP {
+		t.Errorf("refreshed fingerprint not persisted: got %q want %q", got.AgentKeyPin, realFP)
 	}
 }
 
@@ -131,7 +131,7 @@ func TestDialAgentRejectsFingerprintNotMatchingCert(t *testing.T) {
 	// The graph returns a fingerprint matching neither the cache nor the cert.
 	graphSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"data":{"device":{"deviceId":"MAC1","certFingerprint":%q}}}`, strings.Repeat("cd", 32))
+		fmt.Fprintf(w, `{"data":{"device":{"deviceId":"MAC1","publicKeyPin":%q}}}`, strings.Repeat("cd", 32))
 	}))
 	defer graphSrv.Close()
 
@@ -147,12 +147,12 @@ func TestDialAgentRejectsFingerprintNotMatchingCert(t *testing.T) {
 	if err := orgctx.SetCurrent(orgctx.Org{ID: "o1"}); err != nil {
 		t.Fatal(err)
 	}
-	dev := orgctx.Device{ID: "d1", Name: "Ctrl", OrgID: "o1", DeviceID: "MAC1", IP: u.Hostname(), TLSFingerprint: strings.Repeat("ab", 32)}
+	dev := orgctx.Device{ID: "d1", Name: "Ctrl", OrgID: "o1", DeviceID: "MAC1", IP: u.Hostname(), AgentKeyPin: strings.Repeat("ab", 32)}
 	if err := orgctx.SetCurrentDevice(dev); err != nil {
 		t.Fatal(err)
 	}
 
-	if _, _, err := dialAgent(context.Background(), dev); !errors.Is(err, agent.ErrFingerprintMismatch) {
+	if _, _, err := dialAgent(context.Background(), dev); !errors.Is(err, agent.ErrKeyMismatch) {
 		t.Errorf("a graph fingerprint that doesn't match the cert must still be refused, got %v", err)
 	}
 }
@@ -404,7 +404,7 @@ func TestRunDeployPlainReportsState(t *testing.T) {
 // device, so later probes skip the graph round-trip — but only when it's
 // actually the current device (a --device probe against another controller
 // must not overwrite the selection's record).
-func TestPersistFingerprint(t *testing.T) {
+func TestPersistKeyPin(t *testing.T) {
 	isolateConfig(t)
 	if err := orgctx.SetCurrent(orgctx.Org{ID: "o1", Slug: "acme"}); err != nil {
 		t.Fatal(err)
@@ -414,19 +414,19 @@ func TestPersistFingerprint(t *testing.T) {
 	}
 
 	// Persisting for the current device writes the fingerprint back.
-	persistFingerprint(orgctx.Device{ID: "d1", Name: "Ctrl", OrgID: "o1"}, "sha256:abc")
+	persistKeyPin(orgctx.Device{ID: "d1", Name: "Ctrl", OrgID: "o1"}, "sha256:abc")
 	got, err := orgctx.CurrentDevice()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.TLSFingerprint != "sha256:abc" {
-		t.Errorf("fingerprint not persisted: %q", got.TLSFingerprint)
+	if got.AgentKeyPin != "sha256:abc" {
+		t.Errorf("fingerprint not persisted: %q", got.AgentKeyPin)
 	}
 
 	// Persisting for a DIFFERENT device id must not touch the current record.
-	persistFingerprint(orgctx.Device{ID: "other", Name: "Elsewhere", OrgID: "o1"}, "sha256:zzz")
+	persistKeyPin(orgctx.Device{ID: "other", Name: "Elsewhere", OrgID: "o1"}, "sha256:zzz")
 	got, _ = orgctx.CurrentDevice()
-	if got.TLSFingerprint != "sha256:abc" {
-		t.Errorf("a non-current device overwrote the selection: %q", got.TLSFingerprint)
+	if got.AgentKeyPin != "sha256:abc" {
+		t.Errorf("a non-current device overwrote the selection: %q", got.AgentKeyPin)
 	}
 }

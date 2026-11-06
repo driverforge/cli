@@ -3,11 +3,11 @@ package cli
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
-	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -28,7 +28,8 @@ import (
 	"github.com/driverforge/cli/internal/ui"
 )
 
-// The agent serves a new certificate after self-deploy. Graph is the only
+// The agent serves a certificate for a new key after self-deploy (a
+// re-enrolment: a reissue for the same key keeps the pin). Graph is the only
 // authority for its replacement pin; tests can deliberately make it disagree.
 func pinRecoveryFixture(t *testing.T, rotateOnDeploy, graphMatches bool) (orgctx.Device, *agent.Client) {
 	t.Helper()
@@ -56,14 +57,23 @@ func pinRecoveryFixture(t *testing.T, rotateOnDeploy, graphMatches bool) (orgctx
 	old := srv.TLS.Certificates[0]
 	leaf := *srv.Certificate()
 	leaf.SerialNumber = big.NewInt(1077)
-	der, err := x509.CreateCertificate(rand.Reader, &leaf, &leaf, leaf.PublicKey, old.PrivateKey)
+	leaf.SignatureAlgorithm = x509.UnknownSignatureAlgorithm // chosen from the new key
+	newKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
-	renewed = tls.Certificate{Certificate: [][]byte{der}, PrivateKey: old.PrivateKey}
-	fingerprint := func(cert tls.Certificate) string {
-		sum := sha256.Sum256(cert.Certificate[0])
-		return hex.EncodeToString(sum[:])
+	leaf.PublicKey = newKey.Public() // self-signed by the new key
+	der, err := x509.CreateCertificate(rand.Reader, &leaf, &leaf, newKey.Public(), newKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	renewed = tls.Certificate{Certificate: [][]byte{der}, PrivateKey: newKey}
+	keyPin := func(cert tls.Certificate) string {
+		pin, err := agent.KeyPin(cert.Certificate[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		return pin
 	}
 	active.Store(&renewed)
 	if rotateOnDeploy {
@@ -71,15 +81,15 @@ func pinRecoveryFixture(t *testing.T, rotateOnDeploy, graphMatches bool) (orgctx
 	}
 	srv.TLS.Certificates = nil
 	srv.TLS.GetCertificate = func(*tls.ClientHelloInfo) (*tls.Certificate, error) { return active.Load(), nil }
-	graphFP := fingerprint(renewed)
+	graphPin := keyPin(renewed)
 	if !graphMatches {
-		graphFP = strings.Repeat("cd", 32)
+		graphPin = strings.Repeat("cd", 32)
 	}
 	graph := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer tok" {
-			t.Error("fingerprint lookup must be authenticated")
+			t.Error("key pin lookup must be authenticated")
 		}
-		fmt.Fprintf(w, `{"data":{"device":{"deviceId":"MAC1","certFingerprint":%q}}}`, graphFP)
+		fmt.Fprintf(w, `{"data":{"device":{"deviceId":"MAC1","publicKeyPin":%q}}}`, graphPin)
 	}))
 	t.Cleanup(graph.Close)
 	t.Setenv("DRIVERFORGE_GRAPH_URL", graph.URL)
@@ -88,11 +98,11 @@ func pinRecoveryFixture(t *testing.T, rotateOnDeploy, graphMatches bool) (orgctx
 	if err := orgctx.SetCurrent(orgctx.Org{ID: "o1"}); err != nil {
 		t.Fatal(err)
 	}
-	dev := orgctx.Device{ID: "d1", OrgID: "o1", Name: "Controller", DeviceID: "MAC1", IP: u.Hostname(), TLSFingerprint: fingerprint(old)}
+	dev := orgctx.Device{ID: "d1", OrgID: "o1", Name: "Controller", DeviceID: "MAC1", IP: u.Hostname(), AgentKeyPin: keyPin(old)}
 	if err := orgctx.SetCurrentDevice(dev); err != nil {
 		t.Fatal(err)
 	}
-	return dev, agent.New(srv.URL, dev.TLSFingerprint)
+	return dev, agent.New(srv.URL, dev.AgentKeyPin)
 }
 
 func TestVersionRecoversRotatedPin(t *testing.T) {
@@ -128,7 +138,7 @@ func TestSelfUpgradeRecoversRotatedPin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if current.TLSFingerprint == dev.TLSFingerprint {
+	if current.AgentKeyPin == dev.AgentKeyPin {
 		t.Fatal("replacement pin was not persisted")
 	}
 }
@@ -136,7 +146,7 @@ func TestSelfUpgradeRecoversRotatedPin(t *testing.T) {
 func TestVersionReportsCertificateMismatch(t *testing.T) {
 	dev, _ := pinRecoveryFixture(t, false, false)
 	_, rows := controllerRows(context.Background(), dev)
-	if rows[0].Value != "TLS certificate mismatch" {
+	if rows[0].Value != "TLS key mismatch" {
 		t.Fatalf("misleading version status: %+v", rows)
 	}
 }
@@ -158,7 +168,7 @@ func TestSelfUpgradeReportsUnresolvedCertificateMismatch(t *testing.T) {
 func TestUpgradeDiscoveryReportsCertificateMismatch(t *testing.T) {
 	pinRecoveryFixture(t, false, false)
 	row := agentRow(context.Background(), io.Discard)
-	if !strings.Contains(row.note, "TLS certificate mismatch") {
+	if !strings.Contains(row.note, "TLS key mismatch") {
 		t.Fatalf("misleading upgrade discovery status: %+v", row)
 	}
 }
@@ -173,7 +183,7 @@ func TestUnverifiedReplacementPinIsNotPersisted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if current.TLSFingerprint != dev.TLSFingerprint {
+	if current.AgentKeyPin != dev.AgentKeyPin {
 		t.Fatal("unverified replacement pin persisted")
 	}
 }
@@ -201,13 +211,13 @@ func TestSelfUpgradeTUIRecoversRotatedPin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if current.TLSFingerprint == dev.TLSFingerprint {
+	if current.AgentKeyPin == dev.AgentKeyPin {
 		t.Fatal("TUI upgrade did not persist replacement pin")
 	}
 }
 
 func TestPinRecoveryKeepsOriginalClientWhenRefreshUnavailable(t *testing.T) {
-	for _, scenario := range []string{"graph error", "empty fingerprint", "missing address"} {
+	for _, scenario := range []string{"graph error", "empty pin", "missing address"} {
 		t.Run(scenario, func(t *testing.T) {
 			dev, cl := pinRecoveryFixture(t, false, true)
 			if scenario == "missing address" {
@@ -218,13 +228,13 @@ func TestPinRecoveryKeepsOriginalClientWhenRefreshUnavailable(t *testing.T) {
 						http.Error(w, "temporarily unavailable", http.StatusServiceUnavailable)
 						return
 					}
-					io.WriteString(w, `{"data":{"device":{"deviceId":"MAC1","certFingerprint":null}}}`)
+					io.WriteString(w, `{"data":{"device":{"deviceId":"MAC1","publicKeyPin":null}}}`)
 				}))
 				t.Cleanup(graph.Close)
 				t.Setenv("DRIVERFORGE_GRAPH_URL", graph.URL)
 			}
 			got, health, err := healthWithPinRecovery(context.Background(), cl, dev)
-			if !errors.Is(err, agent.ErrFingerprintMismatch) {
+			if !errors.Is(err, agent.ErrKeyMismatch) {
 				t.Fatalf("lost original certificate error: %v", err)
 			}
 			if got != cl || health.AgentVersion != "" {
@@ -234,7 +244,7 @@ func TestPinRecoveryKeepsOriginalClientWhenRefreshUnavailable(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if current.TLSFingerprint != dev.TLSFingerprint {
+			if current.AgentKeyPin != dev.AgentKeyPin {
 				t.Fatal("cached pin changed without a verified replacement")
 			}
 		})
@@ -276,7 +286,7 @@ func TestFramedDeployRecoversRotatedPin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if current.TLSFingerprint == dev.TLSFingerprint {
+	if current.AgentKeyPin == dev.AgentKeyPin {
 		t.Fatal("framed deploy did not persist replacement pin")
 	}
 }

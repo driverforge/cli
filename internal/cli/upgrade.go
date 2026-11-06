@@ -434,8 +434,8 @@ func sdkUpdateRow(ctx context.Context, out io.Writer, r compRow, proj project.Pr
 // operational condition we can name (a sign-in issue, after Fix A), anything else
 // is treated as the component being unreachable.
 func checkReason(err error) string {
-	if errors.Is(err, agent.ErrFingerprintMismatch) {
-		return "TLS certificate mismatch"
+	if errors.Is(err, agent.ErrKeyMismatch) {
+		return "TLS key mismatch"
 	}
 	if clierr.IsUser(err) {
 		return "sign-in issue"
