@@ -147,6 +147,7 @@ keeps text output.`,
 	root.AddCommand(newUpgradeCmd(), newDoctorCmd(), newSkillsCmd())
 	root.AddCommand(newLogsCmd(), newErrorsCmd(), newEventsCmd(), newGetCmd())
 	installUsageErrors(root) // make unknown command/flag/arg errors friendly
+	installStructuredHelp(root)
 	return root
 }
 

@@ -1,7 +1,8 @@
 # Commands
 
 Written for driverforge `{{cli_version}}`. `driverforge <command> --help` is the
-authority if anything here disagrees.
+authority if anything here disagrees; under a coding agent it is JSON, listing
+each flag's `name`, `shorthand`, `type`, `default` and `usage`.
 
 ## logs, errors, events
 
