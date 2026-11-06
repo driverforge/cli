@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/driverforge/cli/internal/driverforgeapi"
 	"github.com/driverforge/cli/internal/telemetry"
@@ -13,7 +14,8 @@ import (
 
 // runWait is a read with a stop condition or --follow: backfill, then the live
 // stream, until the condition is met, the timeout passes or it's interrupted.
-func runWait(ctx context.Context, api *driverforgeapi.Client, scope *telemetryScope, src telemetryread.GraphSource, o readOpts, stdout io.Writer, diag diagnostics) error {
+// silent is the device_not_reporting warning, when the controller is silent.
+func runWait(ctx context.Context, api *driverforgeapi.Client, scope *telemetryScope, src telemetryread.GraphSource, o readOpts, silent *warning, stdout io.Writer, diag diagnostics) error {
 	so := scope.out(o.filter.Since, o.filter.Until)
 	w := telemetryread.Wait{
 		Source: src, Names: scope.names, Filter: o.filter, Tail: o.tail,
@@ -48,7 +50,7 @@ func runWait(ctx context.Context, api *driverforgeapi.Client, scope *telemetrySc
 			wait:     wait,
 		})
 	}
-	return waitExit(interrupted, o.waiting() && !res.Satisfied, diag)
+	return waitExit(interrupted, o.waiting() && !res.Satisfied, silent, diag)
 }
 
 // follower streams entries as a --follow wait accepts them.
@@ -78,17 +80,25 @@ func (f *follower) finish(diag diagnostics, wait *waitOut) {
 }
 
 // waitExit is a finished wait's exit: 130 when interrupted, 3 when a stop
-// condition wasn't met in time (with a hint on stderr), otherwise success.
-func waitExit(interrupted, timedOut bool, diag diagnostics) error {
+// condition wasn't met in time (with a hint on stderr), otherwise success. A
+// timeout on a silent controller says so, since waiting longer won't help.
+func waitExit(interrupted, timedOut bool, silent *warning, diag diagnostics) error {
 	switch {
 	case interrupted:
 		return silentExit(exitInterrupted)
 	case timedOut:
+		hint := "Trigger the driver action again, or re-run with a longer --timeout (max 10m)."
+		if silent != nil {
+			hint = "The controller isn't reporting: check it and its Anvil agent are running before waiting again."
+		}
 		if diag.json {
-			diag.err(newCmdErr("wait_timeout", "The stop condition wasn't met before --timeout.",
-				"Trigger the driver action again, or re-run with a longer --timeout (max 10m)."))
+			e := newCmdErr("wait_timeout", "The stop condition wasn't met before --timeout.", hint)
+			if silent != nil {
+				e = e.with("device_not_reporting", true).with("last_seen_at", silent.Details["last_seen_at"])
+			}
+			diag.err(e)
 		} else {
-			fmt.Fprintln(diag.w, "tip: trigger the driver action again, or re-run with a longer --timeout (max 10m)")
+			fmt.Fprintln(diag.w, "tip: "+strings.ToLower(hint[:1])+hint[1:])
 		}
 		return silentExit(exitWaitTimeout)
 	}

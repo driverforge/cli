@@ -195,6 +195,9 @@ type Device struct {
 	DeviceID     string `json:"deviceId"`
 	Platform     string `json:"platform"`
 	Status       string `json:"status"`
+	// LastSeenAt is when Driverforge last heard from the controller in this
+	// organization: a heartbeat or any telemetry. Zero when unknown.
+	LastSeenAt time.Time `json:"lastSeenAt"`
 }
 
 // DisplayName is the best human label for a device.
@@ -209,7 +212,7 @@ func (d Device) DisplayName() string {
 	}
 }
 
-const deployableDevicesQuery = `query($orgId: String!) { deployableDevices(organizationId: $orgId) { id friendlyName hostname ip deviceId platform status } }`
+const deployableDevicesQuery = `query($orgId: String!) { deployableDevices(organizationId: $orgId) { id friendlyName hostname ip deviceId platform status lastSeenAt } }`
 
 // ListDevices returns the devices deployable for the given organization — the
 // union of the org's devices and the caller's own (user-associated) controllers,

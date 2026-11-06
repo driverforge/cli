@@ -28,6 +28,9 @@ type fakeGraph struct {
 	logByID map[string]map[string]any
 	fail    string // when set, telemetry queries fail with this GraphQL error
 	vars    []map[string]any
+	// lastSeen is when each device was last heard from, by name; unset is
+	// a moment ago.
+	lastSeen map[string]time.Time
 }
 
 func (g *fakeGraph) handler(t *testing.T) http.HandlerFunc {
@@ -48,10 +51,18 @@ func (g *fakeGraph) handler(t *testing.T) http.HandlerFunc {
 		case strings.Contains(q, "myProjects"):
 			reply(map[string]any{"myProjects": []map[string]any{{"id": "proj-1", "name": "Smart TV", "slug": "smart-tv", "organizationId": "org-1"}}})
 		case strings.Contains(q, "deployableDevices"):
-			reply(map[string]any{"deployableDevices": []map[string]any{
+			devices := []map[string]any{
 				{"id": "dev-1", "friendlyName": "bench-a", "deviceId": "000FFF9BB74C", "status": "ACTIVE"},
 				{"id": "dev-2", "friendlyName": "bench-b", "deviceId": "000FFF000002", "status": "ACTIVE"},
-			}})
+			}
+			for _, d := range devices {
+				seen, ok := g.lastSeen[d["friendlyName"].(string)]
+				if !ok {
+					seen = time.Now().Add(-time.Minute)
+				}
+				d["lastSeenAt"] = seen.UTC().Format(time.RFC3339Nano)
+			}
+			reply(map[string]any{"deployableDevices": devices})
 		case g.fail != "":
 			_ = json.NewEncoder(w).Encode(map[string]any{"errors": []map[string]any{{"message": g.fail}}})
 		case strings.Contains(q, "logs("):
@@ -176,6 +187,89 @@ func TestLogsFlagsAloneWorkOutsideARepo(t *testing.T) {
 	}
 	if scope := decode(t, stdout)["scope"].(map[string]any); scope["device"].(map[string]any)["id"] != "000FFF000002" {
 		t.Errorf("scope = %v, want bench-b", scope)
+	}
+}
+
+// TestLogsFromASilentDeviceSayItIsNotReporting: an empty read from a
+// controller that has stopped reporting says so, and a healthy one doesn't.
+func TestLogsFromASilentDeviceSayItIsNotReporting(t *testing.T) {
+	seen := time.Now().Add(-2 * time.Hour).UTC().Truncate(time.Second)
+	g := &fakeGraph{lastSeen: map[string]time.Time{"bench-b": seen}}
+	dir := telemetryEnv(t, g)
+	codes := func(device string) (map[string]any, []string) {
+		stdout, _, code := run(t, dir, "logs", "--org", "acme", "--project", "smart-tv", "--device", device)
+		if code != 0 {
+			t.Fatalf("%s: exit %d\n%s", device, code, stdout)
+		}
+		var silent map[string]any
+		var out []string
+		for _, w := range decode(t, stdout)["warnings"].([]any) {
+			w := w.(map[string]any)
+			out = append(out, w["code"].(string))
+			if w["code"] == warnDeviceSilent {
+				silent = w
+			}
+		}
+		return silent, out
+	}
+
+	silent, got := codes("bench-b")
+	if silent == nil {
+		t.Fatalf("bench-b warnings = %v, want %s", got, warnDeviceSilent)
+	}
+	if at := silent["details"].(map[string]any)["last_seen_at"]; at != seen.Format(time.RFC3339) {
+		t.Errorf("last_seen_at = %v, want %s", at, seen.Format(time.RFC3339))
+	}
+	if !strings.Contains(silent["message"].(string), "bench-b") {
+		t.Errorf("message = %q, want the device named", silent["message"])
+	}
+
+	if silent, got := codes("bench-a"); silent != nil || fmt.Sprint(got) != "[no_entries]" {
+		t.Errorf("bench-a warnings = %v, want only no_entries", got)
+	}
+}
+
+func TestSilenceWarningThreshold(t *testing.T) {
+	now := time.Now()
+	for _, tc := range []struct {
+		lastSeen time.Time
+		want     bool
+	}{
+		{time.Time{}, false}, // unknown is not silent
+		{now.Add(-deviceSilenceThreshold + time.Second), false},
+		{now.Add(-deviceSilenceThreshold), true},
+	} {
+		if got := silenceWarning(&scopeDevice{name: "x", lastSeen: tc.lastSeen}, now) != nil; got != tc.want {
+			t.Errorf("last seen %s ago: silent = %v, want %v", now.Sub(tc.lastSeen), got, tc.want)
+		}
+	}
+	if silenceWarning(nil, now) != nil {
+		t.Error("no device: want no warning")
+	}
+}
+
+// TestWaitTimeoutOnASilentDevice: a wait that times out on a silent
+// controller carries when it was last seen, and doesn't advise waiting longer.
+func TestWaitTimeoutOnASilentDevice(t *testing.T) {
+	silent := silenceWarning(&scopeDevice{name: "bench-b", lastSeen: time.Now().Add(-time.Hour)}, time.Now())
+	var buf bytes.Buffer
+	_ = waitExit(false, true, silent, diagnostics{w: &buf, json: true})
+	var line struct {
+		Error struct {
+			Code    string         `json:"code"`
+			Hint    string         `json:"hint"`
+			Details map[string]any `json:"details"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(buf.Bytes(), &line); err != nil {
+		t.Fatalf("%v: %s", err, buf.String())
+	}
+	e := line.Error
+	if e.Code != "wait_timeout" || e.Details["device_not_reporting"] != true || e.Details["last_seen_at"] != silent.Details["last_seen_at"] {
+		t.Errorf("error = %+v", e)
+	}
+	if strings.Contains(e.Hint, "--timeout") {
+		t.Errorf("hint = %q, shouldn't suggest a longer wait", e.Hint)
 	}
 }
 

@@ -24,7 +24,26 @@ const (
 	warnRetentionClamped = "retention_clamped"
 	warnPayloadTruncated = "payload_truncated"
 	warnTailClamped      = "tail_clamped"
+	warnDeviceSilent     = "device_not_reporting"
 )
+
+// deviceSilenceThreshold is how long a controller can go unheard before a read
+// says so. It matches Anvil's silent-device alert: the agent heartbeats every
+// minute, so five quiet minutes means the controller or its agent is down.
+const deviceSilenceThreshold = 5 * time.Minute
+
+// silenceWarning is device_not_reporting when the scoped controller hasn't
+// been heard from within deviceSilenceThreshold, otherwise nil. An empty read
+// from a silent controller says nothing about the driver.
+func silenceWarning(d *scopeDevice, now time.Time) *warning {
+	if d == nil || d.lastSeen.IsZero() || now.Sub(d.lastSeen) < deviceSilenceThreshold {
+		return nil
+	}
+	ago := now.Sub(d.lastSeen).Truncate(time.Minute)
+	return &warning{Code: warnDeviceSilent,
+		Message: fmt.Sprintf("%s hasn't reported to Driverforge for %s. Check the controller and its Anvil agent before the driver.", d.name, ago),
+		Details: map[string]any{"last_seen_at": d.lastSeen.UTC().Format(time.RFC3339)}}
+}
 
 type warning struct {
 	Code    string         `json:"code"`

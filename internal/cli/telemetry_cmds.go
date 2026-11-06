@@ -149,13 +149,17 @@ func runRead(cmd *cobra.Command, kind telemetryread.Kind, f readFlags) error {
 		return reportFailure(err, o.format, stdout, diag)
 	}
 	o.filter.Controller = scope.device.mac
+	silent := silenceWarning(scope.device, time.Now())
+	if silent != nil {
+		o.warnings = append(o.warnings, *silent)
+	}
 	o.filter.DriverVersion = scope.version
 	src := telemetryread.GraphSource{
 		API: api, Filter: o.filter, ProjectIDs: []string{scope.project.ID},
 		TimeRangeMinutes: o.window, Names: scope.names,
 	}
 	if o.follow || o.waiting() {
-		return runWait(ctx, api, scope, src, o, stdout, diag)
+		return runWait(ctx, api, scope, src, o, silent, stdout, diag)
 	}
 
 	res, err := telemetryread.Fetch(ctx, src, telemetryread.Query{Filter: o.filter, Tail: o.tail, Before: o.before})

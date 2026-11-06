@@ -6,6 +6,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/driverforge/cli/internal/driverforgeapi"
 	"github.com/driverforge/cli/internal/driverforgeconfig"
@@ -44,8 +45,9 @@ type telemetryScope struct {
 
 // scopeDevice is the resolved controller.
 type scopeDevice struct {
-	mac  string // hardware id: what telemetry records as the controller
-	name string
+	mac      string // hardware id: what telemetry records as the controller
+	name     string
+	lastSeen time.Time // zero when unknown
 }
 
 // names maps a controller's hardware id to its display name, for entries.
@@ -222,7 +224,7 @@ func matchProject(projects []driverforgeapi.Project, orgID, arg string) (driverf
 // only device. It never chooses one device from several.
 func resolveScopeDevice(devices []driverforgeapi.Device, orgID, arg string) (*scopeDevice, error) {
 	toScope := func(d driverforgeapi.Device) *scopeDevice {
-		return &scopeDevice{mac: d.DeviceID, name: d.DisplayName()}
+		return &scopeDevice{mac: d.DeviceID, name: d.DisplayName(), lastSeen: d.LastSeenAt}
 	}
 	if arg != "" {
 		var matches []driverforgeapi.Device

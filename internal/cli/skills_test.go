@@ -192,12 +192,12 @@ func TestSkillsNameOnlyRealCodesAndFields(t *testing.T) {
 		codeContextUnresolved, codeContextAmbiguous, codeProjectNotFound,
 		codeDeviceNotFound, codeEntryNotFound, codeNotInitialised,
 		codeBuildFailed, codeAgentUnreachable, codeDeployFailed, codeDeployTimedOut,
-		warnNoEntries, warnRetentionClamped, warnPayloadTruncated, warnTailClamped,
+		warnNoEntries, warnRetentionClamped, warnPayloadTruncated, warnTailClamped, warnDeviceSilent,
 		telemetryread.ReasonUntilMatch, telemetryread.ReasonMinEvents,
 		string(agent.StateConfirmedWithErrors),
 		"wait_timeout", // runWait's timeout error
 		// details keys
-		"retry_after_ms", "window_minutes",
+		"retry_after_ms", "window_minutes", "last_seen_at",
 	} {
 		known[c] = true
 	}

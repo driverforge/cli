@@ -62,6 +62,7 @@ stay strings.
 
 | Code | Meaning |
 | --- | --- |
+| `device_not_reporting` | The controller hasn't reported to Driverforge for 5 minutes or more; `details.last_seen_at` is when it last did. Empty results say nothing about the driver |
 | `no_entries` | Nothing matched the scope and filters |
 | `payload_truncated` | Entries were cut; `details.entries[]` holds each `id` and the `command` that fetches it whole |
 | `retention_clamped` | `--since` reached past the plan's retention; `details.window_minutes` is what was searched |
@@ -92,7 +93,8 @@ to stdout and the same as a line on stderr.
 
 A wait that times out is not an error document: stdout still carries the envelope
 with `wait.satisfied: false`, stderr carries `{"error": {"code": "wait_timeout"}}`,
-and the exit status is 3.
+and the exit status is 3. When the controller isn't reporting, the error's
+`details` carry `device_not_reporting: true` and `last_seen_at`.
 
 ## Exit statuses
 
