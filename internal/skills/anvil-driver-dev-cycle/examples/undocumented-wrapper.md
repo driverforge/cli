@@ -22,7 +22,7 @@ end)
 **4. Read.**
 
 ```sh
-driverforge logs --version current --until-match 'vendor-raw' --timeout 30s \
+driverforge logs --version 2026110502 --until-match 'vendor-raw' --timeout 30s \
   | jq '{scope: .scope.version, wait: .wait.satisfied, msg: [.entries[].message]}'
 ```
 
@@ -42,8 +42,8 @@ fallback, lower the raw log to `Debug` or remove it, then `driverforge deploy`
 (version `2026110503`) and confirm:
 
 ```sh
-driverforge logs --version current --until-match 'power=on' --timeout 30s
-driverforge errors --version current
+driverforge logs --version 2026110503 --until-match 'power=on' --timeout 30s
+driverforge errors --version 2026110503
 ```
 
 The expected log appears and `errors` returns `count: 0`. Done. The developer

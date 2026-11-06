@@ -4,11 +4,8 @@
 flaps, and the developer wants it to back off instead. The reconnect runs on a
 timer the driver starts itself, so no person is needed.
 
-**1. Baseline.** Before editing, note the running version:
-
-```sh
-driverforge logs --version current --tail 1 | jq -r '.scope.version'   # 2026110507
-```
+**1. Baseline.** Before editing, note the version the last deploy returned:
+`"version": "2026110507"`. Its readings are the baseline.
 
 **2. Change and deploy.** Add the back-off, `driverforge deploy`, note
 `"version": "2026110508"`.
@@ -20,11 +17,11 @@ reconnect timer.
 
 ```sh
 driverforge logs --version 2026110507 --grep 'reconnect' --tail 50 > prev.json
-driverforge logs --version current --grep 'reconnect' --since 5m \
+driverforge logs --version 2026110508 --grep 'reconnect' --since 5m \
   --min-events 3 --timeout 2m > new.json
 jq '[.entries[] | .timestamp]' prev.json new.json
 jq '.count' prev.json new.json
-driverforge errors --version current | jq '.count'
+driverforge errors --version 2026110508 | jq '.count'
 ```
 
 **5. Compare.** The previous version logged a reconnect every second; the new one

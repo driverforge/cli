@@ -5,8 +5,8 @@ media room's remote. Nobody is sure which callback the runtime calls or with wha
 arguments.
 
 **1. Decide.** Callbacks are recorded as events with their arguments, so no code
-change is needed. The driver is already deployed; `driverforge logs --version current --tail 1`
-shows `scope.version` is the deployed version.
+change is needed. The last `driverforge deploy` returned `"version": "2026110504"`,
+so every read uses `--version 2026110504`.
 
 **2. Marker.**
 
@@ -20,7 +20,7 @@ Volume Up once. I'm watching for the callbacks now and will read them myself."
 **4. Wait once.**
 
 ```sh
-driverforge events --version current --since 2026-11-05T10:14:03Z \
+driverforge events --version 2026110504 --since 2026-11-05T10:14:03Z \
   --min-events 1 --timeout 60s \
   | jq '.entries[] | {timestamp, name, args: .payload.args, status, duration_ms}'
 ```
@@ -36,7 +36,7 @@ callbacks; to be sure nothing followed, read the window again a few seconds late
 without a stop condition:
 
 ```sh
-driverforge events --version current --since 2026-11-05T10:14:03Z
+driverforge events --version 2026110504 --since 2026-11-05T10:14:03Z
 ```
 
 **5. Report as observed.** "One callback: `ReceivedFromProxy` on binding 5001 with

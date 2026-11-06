@@ -57,18 +57,20 @@ Pick the job from the question you are answering. Each has a section in
    are already recorded as events, so runtime questions need no code change. For
    anything else, add a log line at the point that answers it — for a vendor API,
    the raw response before parsing. See [references/instrumenting.md](references/instrumenting.md).
-2. **Deploy.** `driverforge deploy`. Read `version` from its result: each deploy
-   gets a new driver version, and `--version current` now means it. `state` must be
+2. **Deploy.** `driverforge deploy`. Keep `version` from its result: each deploy
+   gets a new driver version, and every read in this loop passes it as
+   `--version <n>`. Other developers can deploy to the same controller, so read
+   your version explicitly rather than "whatever is running". `state` must be
    `confirmed`; `confirmed_with_errors` means the driver's init threw — read
-   `driverforge errors --version current` before anything else. `driverforge sync`
+   `driverforge errors --version <n>` before anything else. `driverforge sync`
    is faster but keeps the version and does **not** re-run OnDriverInit or
    OnDriverLateInit; after a sync, scope reads with `--since <marker>` as well.
 3. **Trigger.** Cause the activity you want to see — see Triggering below.
 4. **Read.** Block until the evidence arrives instead of sleeping and polling:
 
    ```sh
-   driverforge logs --version current --until-match '<regex>' --timeout 30s
-   driverforge errors --version current
+   driverforge logs --version <n> --until-match '<regex>' --timeout 30s
+   driverforge errors --version <n>
    ```
 
 5. **Compare** what happened with what you expected: the real payload against the
@@ -97,7 +99,7 @@ isn't written down, ask the developer once, and suggest they record it.
 2. Tell the developer exactly what to do and that you are waiting. Never ask them
    to paste logs.
 3. Wait once, scoped by the marker:
-   `driverforge events --version current --since <marker> --min-events 1 --timeout 60s`,
+   `driverforge events --version <n> --since <marker> --min-events 1 --timeout 60s`,
    or `--until-match '<regex>'` when you know the entry to expect.
 4. Read the entries oldest first and report the sequence as observed.
 
@@ -123,11 +125,11 @@ Branch on the exit status and `error.code`, never on message text.
 
 | Signal | Meaning | What you do |
 | --- | --- | --- |
-| Exit 3, `wait.satisfied: false` | Nothing matched before `--timeout` | Check the trigger fired and `scope.version` is the new version. Don't just wait longer and don't edit the parser |
+| Exit 3, `wait.satisfied: false` | Nothing matched before `--timeout` | Check the trigger fired and `scope.version` is your deploy's version. Run `driverforge logs --version latest --tail 1`: a higher `scope.version` means someone deployed over yours. Don't just wait longer and don't edit the parser |
 | Exit 0, warning `no_entries` | Nothing for this scope yet | Re-run with `--until-match` and `--timeout 30s`. Still empty: treat it as setup, not code (below) |
 | `no_entries` for every version, or deploy `state` `unconfirmed` | No telemetry from the device | Stop editing code. Run `driverforge device capabilities` and `driverforge doctor`; ask the developer to check the Anvil agent is installed and authenticated on the controller |
 | Error `context_ambiguous` or `context_unresolved` | No single org, project or device | Follow `hint`; `details.candidates` lists the choices. Usually `driverforge device select` or `--device` |
-| Error `no_deploy_recorded` | `--version current` has no deploy from this machine | Deploy first, or pass `--version <n>` |
+| Error `no_deploy_recorded` | `--version current` has no deploy from this machine | Pass `--version <n>` from your deploy instead |
 | Warning `payload_truncated` | A message or payload was cut at `--max-payload-bytes` | Run the `command` listed in `details.entries[]` (`driverforge get <id>`). Never reason from the partial payload |
 | Warning `retention_clamped` | `--since` reached past the plan's retention | Older entries are gone; don't treat their absence as evidence |
 | Exit 4, `auth_required` | Not signed in | Ask the developer to run `driverforge login`. Never attempt an interactive login |
@@ -156,7 +158,8 @@ What the SDK records on its own, and how to add the log line a question needs:
 
 ## Habits
 
-- Scope every read with `--version current` (or `--version <n>`) and check `scope`.
+- Scope every read with `--version <n>`, the version your deploy returned, and
+  check `scope`.
 - When a person triggers the action, pass `--since <marker>`.
 - One blocking `--until-match` or `--min-events` call beats sleeping and re-polling.
 - Compare across a change with an explicit `--version <previous>`.

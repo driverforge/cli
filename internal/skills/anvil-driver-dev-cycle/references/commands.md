@@ -23,9 +23,10 @@ Precedence is flag, then environment, then the repo's `.driverforge/config.json`
 org's only device; with several and none selected the read fails with
 `context_ambiguous` rather than choosing. Nothing prompts.
 
-`--version current` is the version `driverforge deploy` last recorded for this
-project and device on this machine. `driverforge sync` doesn't record one, so it
-still names the last deploy.
+Prefer the number `driverforge deploy` returned. `--version current` is the
+version this machine last deployed to the device: if anyone else has deployed to
+that controller since, it names a version that is no longer running.
+`driverforge sync` keeps the version.
 
 ### Window and paging
 

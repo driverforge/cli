@@ -40,9 +40,9 @@ call from OnDriverLateInit) so you can trigger it yourself, and remove it after.
 
    ```sh
    # when you know the entry to expect
-   driverforge logs --version current --since <marker> --until-match '<regex>' --timeout 60s
+   driverforge logs --version <n> --since <marker> --until-match '<regex>' --timeout 60s
    # when exploring
-   driverforge events --version current --since <marker> --min-events 1 --timeout 60s
+   driverforge events --version <n> --since <marker> --min-events 1 --timeout 60s
    ```
 
    `--follow --timeout 60s` streams everything in the window when you can't name a
