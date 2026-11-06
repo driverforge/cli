@@ -1,7 +1,9 @@
 # Instrumenting a driver
 
 What the Driverforge SDK records on its own, and how to add the evidence a question
-needs. Full SDK documentation: https://go.driverforge.com/sdk.
+needs. Full SDK documentation: https://go.driverforge.com/sdk. For anything this
+skill doesn't cover, the documentation index for agents is
+https://docs.driverforge.com/llms.txt: it links every page as Markdown.
 
 ## Setting up a driver
 

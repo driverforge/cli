@@ -18,6 +18,9 @@ Developing, testing or debugging a Control4 driver in a Driverforge project (a r
 with `.driverforge/config.json`), and any question about what the driver, the
 Control4 runtime or a vendor API actually does.
 
+For anything this skill doesn't cover, read the Driverforge documentation index
+for agents, https://docs.driverforge.com/llms.txt: it links every page as Markdown.
+
 ## 2. Preflight
 
 Run these once per session, before the loop.
