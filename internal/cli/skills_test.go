@@ -189,7 +189,7 @@ func TestSkillsNameOnlyRealCodesAndFields(t *testing.T) {
 	for _, c := range []string{
 		codeUsage, codeInputRequired, codeAuthRequired, codeInterrupted, codeRateLimited,
 		codeConnectionLost, codeUnavailable, codeInternal,
-		codeContextUnresolved, codeContextAmbiguous, codeNoDeployRecorded, codeProjectNotFound,
+		codeContextUnresolved, codeContextAmbiguous, codeProjectNotFound,
 		codeDeviceNotFound, codeEntryNotFound, codeNotInitialised,
 		codeBuildFailed, codeAgentUnreachable, codeDeployFailed, codeDeployTimedOut,
 		warnNoEntries, warnRetentionClamped, warnPayloadTruncated, warnTailClamped,

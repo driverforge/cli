@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/driverforge/cli/internal/auth"
-	"github.com/driverforge/cli/internal/deployrecord"
 	"github.com/driverforge/cli/internal/orgctx"
 	"github.com/driverforge/cli/internal/telemetryread"
 )
@@ -137,7 +136,9 @@ func decode(t *testing.T, s string) map[string]any {
 	return m
 }
 
-func TestLogsVersionCurrentReadsTheRecordedDeploy(t *testing.T) {
+// Inside a driver repo, the project comes from the repo and the device from
+// the selection; --version narrows the read to one deploy.
+func TestLogsInARepoReadsTheSelectedDeviceAndVersion(t *testing.T) {
 	g := &fakeGraph{logs: []map[string]any{logRow("l2", 2000, "second", "12"), logRow("l1", 1000, "first", "12")}}
 	telemetryEnv(t, g)
 	repo := driverRepo(t)
@@ -147,12 +148,7 @@ func TestLogsVersionCurrentReadsTheRecordedDeploy(t *testing.T) {
 	if err := orgctx.SetCurrentDevice(orgctx.Device{ID: "dev-1", Name: "bench-a", OrgID: "org-1", DeviceID: "000FFF9BB74C"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := deployrecord.Save(deployrecord.Record{Project: "smart-tv", Driver: "smart_tv.c4z",
-		Device: deployrecord.Device{ID: "dev-1"}, Version: "12", DeployedAt: time.Now()}); err != nil {
-		t.Fatal(err)
-	}
-
-	stdout, _, code := run(t, repo, "logs", "--version", "current", "-o", "json")
+	stdout, _, code := run(t, repo, "logs", "--version", "12", "-o", "json")
 	if code != 0 {
 		t.Fatalf("exit %d\n%s", code, stdout)
 	}
@@ -167,7 +163,7 @@ func TestLogsVersionCurrentReadsTheRecordedDeploy(t *testing.T) {
 	}
 	filters := g.vars[0]["filters"].(map[string]any)
 	if fmt.Sprint(filters["controllers"]) != "[000FFF9BB74C]" || fmt.Sprint(filters["driverVersions"]) != "[12]" {
-		t.Errorf("server filters = %v, want the recorded device and version", filters)
+		t.Errorf("server filters = %v, want the selected device and version", filters)
 	}
 }
 
@@ -202,17 +198,6 @@ func TestLogsWithSeveralDevicesAndNoneSelectedIsAmbiguous(t *testing.T) {
 		t.Fatalf("exit %d, want %d", code, exitContext)
 	}
 	if e := decode(t, stdout)["error"].(map[string]any); e["code"] != codeContextAmbiguous {
-		t.Errorf("error = %v", e)
-	}
-}
-
-func TestVersionCurrentWithoutARecordExits5(t *testing.T) {
-	dir := telemetryEnv(t, &fakeGraph{})
-	stdout, _, code := run(t, dir, "logs", "--project", "smart-tv", "--device", "bench-a", "--version", "current")
-	if code != exitContext {
-		t.Fatalf("exit %d, want %d", code, exitContext)
-	}
-	if e := decode(t, stdout)["error"].(map[string]any); e["code"] != codeNoDeployRecorded {
 		t.Errorf("error = %v", e)
 	}
 }
@@ -363,25 +348,15 @@ func TestValidateDefaults(t *testing.T) {
 	}
 }
 
-func TestRecordDeployKeysTheRepoProjectAndDevice(t *testing.T) {
-	telemetryEnv(t, &fakeGraph{})
-	repo := driverRepo(t)
-	prev := flagProjectDir
-	flagProjectDir = repo
-	t.Cleanup(func() { flagProjectDir = prev })
-
-	recordDeploy(orgctx.Device{ID: "dev-1", Name: "bench-a", DeviceID: "000FFF9BB74C"}, "smart_tv.c4z", "2026110401")
-
-	rec, ok := deployrecord.Latest("smart-tv", "dev-1")
-	if !ok {
-		t.Fatal("no record for the deploy")
+// --version takes a number or latest; anything else is a usage error rather
+// than a read that matches nothing.
+func TestVersionMustBeANumberOrLatest(t *testing.T) {
+	dir := telemetryEnv(t, &fakeGraph{})
+	stdout, _, code := run(t, dir, "logs", "--project", "smart-tv", "--device", "bench-a", "--version", "current")
+	if code != exitUsage {
+		t.Fatalf("exit %d, want %d\n%s", code, exitUsage, stdout)
 	}
-	want := deployrecord.Record{
-		Org: "acme", Project: "smart-tv", Driver: "smart_tv.c4z", Version: "2026110401",
-		Device:     deployrecord.Device{ID: "dev-1", Name: "bench-a", DeviceID: "000FFF9BB74C"},
-		DeployedAt: rec.DeployedAt,
-	}
-	if rec != want {
-		t.Errorf("record = %+v, want %+v", rec, want)
+	if e := decode(t, stdout)["error"].(map[string]any); e["code"] != codeUsage {
+		t.Errorf("error = %v", e)
 	}
 }

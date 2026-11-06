@@ -16,16 +16,15 @@ and one output shape. They differ in the entries they read and a few filters.
 | `--org` | `DRIVERFORGE_ORG` | Organization slug, name or id |
 | `--project` | `DRIVERFORGE_PROJECT` | Project slug, name or id |
 | `--device` | `DRIVERFORGE_DEVICE` | Device name, hostname, hardware id or id |
-| `--version` | | `current` (this machine's last deploy to the device), `latest` (the highest version in the device's telemetry) or a version number |
+| `--version` | | A version number, or `latest` (the highest version in the device's telemetry) |
 
 Precedence is flag, then environment, then the repo's `.driverforge/config.json`
 (org and project), then the selected org and device. The device falls back to the
 org's only device; with several and none selected the read fails with
 `context_ambiguous` rather than choosing. Nothing prompts.
 
-Prefer the number `driverforge deploy` returned. `--version current` is the
-version this machine last deployed to the device: if anyone else has deployed to
-that controller since, it names a version that is no longer running.
+Pass the number `driverforge deploy` returned. Someone else may deploy to the same
+controller, so read your own version rather than `latest`.
 `driverforge sync` keeps the version.
 
 ### Window and paging

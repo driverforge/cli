@@ -135,7 +135,6 @@ Branch on the exit status and `error.code`, never on message text.
 | Exit 0, warning `no_entries` | Nothing for this scope yet | Re-run with `--until-match` and `--timeout 30s`. Still empty: treat it as setup, not code (below) |
 | `no_entries` for every version, or deploy `state` `unconfirmed` | No telemetry from the device | Stop editing code. Run `driverforge device capabilities` and `driverforge doctor`; ask the developer to check the Anvil agent is installed and authenticated on the controller |
 | Error `context_ambiguous` or `context_unresolved` | No single org, project or device | Follow `hint`; `details.candidates` lists the choices. Usually `driverforge device select` or `--device` |
-| Error `no_deploy_recorded` | `--version current` has no deploy from this machine | Pass `--version <n>` from your deploy instead |
 | Warning `payload_truncated` | A message or payload was cut at `--max-payload-bytes` | Run the `command` listed in `details.entries[]` (`driverforge get <id>`). Never reason from the partial payload |
 | Warning `retention_clamped` | `--since` reached past the plan's retention | Older entries are gone; don't treat their absence as evidence |
 | Exit 4, `auth_required` | Not signed in | Ask the developer to run `driverforge login`. Never attempt an interactive login |

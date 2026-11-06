@@ -83,7 +83,6 @@ to stdout and the same as a line on stderr.
 | `context_ambiguous` | 5 | More than one org, project or device could be meant; `details.field` and `details.candidates` |
 | `project_not_found` | 5 | No accessible project matches `--project` |
 | `device_not_found` | 5 | No device in the org matches `--device` |
-| `no_deploy_recorded` | 5 | `--version current` with no deploy from this machine |
 | `rate_limited` | 6 | Too many requests; `details.retry_after_ms` when known |
 | `entry_not_found` | 1 | `get` found no entry with that id in the project |
 | `connection_lost` | 1 | Driverforge couldn't be reached, or a live stream dropped |
@@ -104,7 +103,7 @@ and the exit status is 3.
 | 2 | Usage |
 | 3 | A wait's stop condition wasn't met before `--timeout` |
 | 4 | Not signed in |
-| 5 | Scope unresolved, or no deploy recorded |
+| 5 | Scope unresolved |
 | 6 | Rate limited |
 | 130 | Interrupted |
 

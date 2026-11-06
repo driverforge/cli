@@ -2,11 +2,11 @@ package cli
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
 
-	"github.com/driverforge/cli/internal/deployrecord"
 	"github.com/driverforge/cli/internal/driverforgeapi"
 	"github.com/driverforge/cli/internal/driverforgeconfig"
 	"github.com/driverforge/cli/internal/orgctx"
@@ -24,8 +24,7 @@ const (
 
 // Version selectors --version accepts besides a literal version.
 const (
-	versionCurrent = "current" // what this CLI last deployed to the device
-	versionLatest  = "latest"  // the highest version seen in telemetry
+	versionLatest = "latest" // the highest version seen in telemetry
 )
 
 // scopeFlags are the scope a telemetry command was asked for: flag values,
@@ -45,7 +44,6 @@ type telemetryScope struct {
 
 // scopeDevice is the resolved controller.
 type scopeDevice struct {
-	id   string // graph device id: the deploy record's key
 	mac  string // hardware id: what telemetry records as the controller
 	name string
 }
@@ -224,7 +222,7 @@ func matchProject(projects []driverforgeapi.Project, orgID, arg string) (driverf
 // only device. It never chooses one device from several.
 func resolveScopeDevice(devices []driverforgeapi.Device, orgID, arg string) (*scopeDevice, error) {
 	toScope := func(d driverforgeapi.Device) *scopeDevice {
-		return &scopeDevice{id: d.ID, mac: d.DeviceID, name: d.DisplayName()}
+		return &scopeDevice{mac: d.DeviceID, name: d.DisplayName()}
 	}
 	if arg != "" {
 		var matches []driverforgeapi.Device
@@ -273,24 +271,11 @@ func ambiguousDevice(devices []driverforgeapi.Device) error {
 		with("field", "device").with("candidates", cands)
 }
 
-// resolveVersion settles --version: a literal, the version this CLI last
-// deployed to the device, or the highest version in the device's telemetry.
+// resolveVersion settles --version: a literal, or the highest version in the
+// device's telemetry.
 func (s *telemetryScope) resolveVersion(ctx context.Context, api *driverforgeapi.Client, v string) error {
 	switch v {
 	case "":
-		return nil
-	case versionCurrent:
-		if s.device == nil {
-			return newCmdErr(codeUsage, "--version current needs a device.", "Pass --version with a number.")
-		}
-		rec, ok := deployrecord.Latest(s.project.Slug, s.device.id)
-		if !ok {
-			return newCmdErr(codeNoDeployRecorded,
-				"This machine has no record of deploying "+s.project.Slug+" to "+s.device.name+".",
-				"Pass --version <n>, or run `driverforge deploy` from this machine first.").
-				with("project", s.project.Slug).with("device", s.device.mac)
-		}
-		s.version = rec.Version
 		return nil
 	case versionLatest:
 		latest, err := s.latestVersion(ctx, api)
@@ -304,6 +289,12 @@ func (s *telemetryScope) resolveVersion(ctx context.Context, api *driverforgeapi
 		}
 		s.version = latest
 		return nil
+	}
+	// Control4 driver versions are integers; anything else (an old
+	// `current`, a typo) would match nothing and look like an empty read.
+	if strings.Trim(v, "0123456789") != "" {
+		return newCmdErr(codeUsage, fmt.Sprintf("--version %q isn't a driver version.", v),
+			"Pass the version number `driverforge deploy` returned, or latest.").with("version", v)
 	}
 	s.version = v
 	return nil

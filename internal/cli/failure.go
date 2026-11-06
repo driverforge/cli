@@ -21,7 +21,7 @@ const (
 	exitUsage       = 2   // a bad flag or value, or an answer a prompt would have asked for
 	exitWaitTimeout = 3   // a stop condition wasn't met in time
 	exitAuth        = 4   // not signed in, or the session expired
-	exitContext     = 5   // org, project or device unresolved, or no deploy recorded
+	exitContext     = 5   // org, project or device unresolved
 	exitRateLimited = 6   // rate limited or a plan limit reached
 	exitInterrupted = 130 // SIGINT
 )
@@ -43,7 +43,6 @@ const (
 	// Scope: what a command acts on.
 	codeContextUnresolved = "context_unresolved"
 	codeContextAmbiguous  = "context_ambiguous"
-	codeNoDeployRecorded  = "no_deploy_recorded"
 	codeOrgNotFound       = "org_not_found"
 	codeOrgNotSelected    = clierr.CodeOrgNotSelected
 	codeProjectNotFound   = "project_not_found"
@@ -97,7 +96,6 @@ var codeExit = map[string]int{
 	codeAuthRequired:      exitAuth,
 	codeContextUnresolved: exitContext,
 	codeContextAmbiguous:  exitContext,
-	codeNoDeployRecorded:  exitContext,
 	codeOrgNotFound:       exitContext,
 	codeOrgNotSelected:    exitContext,
 	codeProjectNotFound:   exitContext,

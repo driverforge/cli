@@ -123,7 +123,6 @@ func runInstall(ctx context.Context, out io.Writer, cl *agent.Client, dev orgctx
 	if err != nil {
 		return err
 	}
-	recordDeploy(dev, req.Filename, localVersion)
 
 	// Record the baseline only when the restart was confirmed — an unconfirmed
 	// install leaves future syncs without a verified hash rather than a wrong

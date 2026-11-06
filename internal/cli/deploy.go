@@ -16,11 +16,8 @@ import (
 
 	"github.com/driverforge/cli/internal/agent"
 	"github.com/driverforge/cli/internal/clierr"
-	"github.com/driverforge/cli/internal/deployrecord"
 	"github.com/driverforge/cli/internal/driverforgeapi"
-	"github.com/driverforge/cli/internal/driverforgeconfig"
 	"github.com/driverforge/cli/internal/orgctx"
-	"github.com/driverforge/cli/internal/project"
 	"github.com/driverforge/cli/internal/ui"
 	"github.com/driverforge/cli/pkg/c4z"
 	"github.com/driverforge/cli/pkg/c4z/driverxml"
@@ -156,9 +153,6 @@ func runDeployToDevice(ctx context.Context, out io.Writer, dev orgctx.Device, c4
 	localVersion := driverVersionFromC4z(c4zPath)
 
 	state, err := runDeployPlain(dctx, out, cl, dev, filename, hash, f, optIn, h.AgentVersion, localVersion)
-	if err == nil {
-		recordDeploy(dev, filename, localVersion)
-	}
 	if err != nil {
 		// First deploy: the driver isn't in the director's project yet. If the
 		// agent can bootstrap and we're interactive, offer the install wizard
@@ -321,7 +315,6 @@ func deployFramedTo(ctx context.Context, out io.Writer, opts c4z.Options, config
 			return err
 		}
 		shipped.State, shipped.Version, shipped.ReportURL = string(terminal.State), optional(terminal.Version), optional(terminal.ReportURL)
-		recordDeploy(dev, filename, localVersion)
 		if deployConfirmed(terminal.State) {
 			recordBaselineAndRefresh(ctx, deployedDriver{
 				Client: cl, Health: h, Device: dev,
@@ -710,30 +703,4 @@ func firstNonEmpty(a, b string) string {
 		return a
 	}
 	return b
-}
-
-// recordDeploy remembers a successful deploy so `driverforge logs --version
-// current` (and errors, events) can read back exactly its telemetry.
-// Best-effort: the record is a convenience, and a deploy outside a linked
-// project (no .driverforge/config.json) has no project to key it by.
-func recordDeploy(dev orgctx.Device, filename, version string) {
-	if version == "" {
-		return
-	}
-	proj, err := project.Locate(flagProjectDir)
-	if err != nil {
-		return
-	}
-	cfg, err := driverforgeconfig.Load(proj.Dir)
-	if err != nil || cfg == nil || cfg.Project.Slug == "" {
-		return
-	}
-	_ = deployrecord.Save(deployrecord.Record{
-		Org:        cfg.Org,
-		Project:    cfg.Project.Slug,
-		Driver:     filename,
-		Device:     deployrecord.Device{ID: dev.ID, Name: dev.Name, DeviceID: dev.DeviceID},
-		Version:    version,
-		DeployedAt: time.Now().UTC(),
-	})
 }

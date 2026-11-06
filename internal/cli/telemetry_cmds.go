@@ -91,10 +91,10 @@ and the device chosen with ` + "`driverforge device select`" + `. --org, --proje
 Output is text on a terminal and JSON otherwise (and under a coding agent, or with
 DRIVERFORGE_OUTPUT=json); stdout
 carries data only. Exit status: 0 ok, 1 failure, 2 usage, 3 wait timed out,
-4 not signed in, 5 scope unresolved or no deploy recorded, 6 rate limited, 130 interrupted.`,
-		Example: fmt.Sprintf(`  driverforge %[1]s --version current
+4 not signed in, 5 scope unresolved, 6 rate limited, 130 interrupted.`,
+		Example: fmt.Sprintf(`  driverforge %[1]s --version 2026110502
   driverforge %[1]s --org acme --project smart-tv --device bench-a --version 12 --tail 50
-  driverforge %[1]s --version current --until-match '"data"' --timeout 30s
+  driverforge %[1]s --version 2026110502 --until-match '"data"' --timeout 30s
   driverforge %[1]s --device bench-a --since 10m`, use),
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -104,7 +104,7 @@ carries data only. Exit status: 0 ok, 1 failure, 2 usage, 3 wait timed out,
 	fl := cmd.Flags()
 	addScopeFlags(cmd, &f.scope)
 	fl.StringVar(&f.scope.device, "device", "", "device: name, hostname, hardware id or id (default: the selected device)")
-	fl.StringVar(&f.scope.version, "version", "", "driver version: a number, `current` (this machine's last deploy) or `latest`")
+	fl.StringVar(&f.scope.version, "version", "", "driver version: a number (the version `driverforge deploy` returned) or `latest`")
 	fl.StringVar(&f.since, "since", "", "start of the window: a duration back from now (30s, 10m, 2h) or an RFC 3339 time")
 	fl.StringVar(&f.until, "until", "", "end of the window: a duration back from now or an RFC 3339 time")
 	fl.IntVar(&f.tail, "tail", defaultTail, "newest N entries, returned oldest first (max 1000)")
