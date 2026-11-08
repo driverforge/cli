@@ -23,18 +23,23 @@ func newGetCmd() *cobra.Command {
 	)
 	cmd := &cobra.Command{
 		Use:   "get <id>",
-		Short: "Fetch one log, error or event with its full payload",
+		Short: "Fetch one log, error or event with its full payload, or an error group",
 		Long: `Fetch one telemetry entry by id with its full, untruncated payload — the
 command a payload_truncated warning lists for each entry it cut. An event's id
-is its trace id.`,
-		Example: "  driverforge get 6f1c2f9e-6c1a-4c39-9a51-0d4b8e1f2a3b\n  driverforge get 0123456789abcdef0123456789abcdef --type event -o json",
+is its trace id.
+
+An error group is every occurrence of one error. Fetch it by its reference,
+<PROJECT-SLUG>-<FINGERPRINT> (for example POOL-PUMP-4F2A9C1B), the form the
+web app shows and people quote. The reference names the project, and a group is
+found however long ago it last occurred.`,
+		Example: "  driverforge get 6f1c2f9e-6c1a-4c39-9a51-0d4b8e1f2a3b\n  driverforge get 0123456789abcdef0123456789abcdef --type event -o json\n  driverforge get POOL-PUMP-4F2A9C1B --type error_group",
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runGet(cmd, args[0], scope, kind, output, maxPayload)
 		},
 	}
 	addScopeFlags(cmd, &scope)
-	cmd.Flags().StringVar(&kind, "type", "", "entry type, to skip looking it up: log, error or event")
+	cmd.Flags().StringVar(&kind, "type", "", "entry type, to skip looking it up: log, error, event or error_group")
 	cmd.Flags().StringVarP(&output, "output", "o", "", "output format: text or json")
 	cmd.Flags().IntVar(&maxPayload, "max-payload-bytes", 0, "cap the message or payload; 0 (the default) for no cap")
 	return cmd
@@ -55,6 +60,9 @@ func runGet(cmd *cobra.Command, id string, sf scopeFlags, kind, output string, m
 	}
 	if err != nil {
 		return reportFailure(err, format, stdout, diag)
+	}
+	if ref, ok := parseErrorRef(id); ok && (kind == kindErrorGroup || kind == "") {
+		return runGetGroup(cmd.Context(), ref, sf, format, stdout, diag)
 	}
 
 	ctx := cmd.Context()
@@ -85,10 +93,14 @@ func validateGet(id, kind string, maxPayload int) error {
 	switch {
 	case maxPayload < 0:
 		return newCmdErr(codeUsage, "--max-payload-bytes can't be negative.", "Pass a byte count, or 0 for no cap.")
-	case kind != "" && !slices.Contains(allKinds, telemetryread.Kind(kind)):
-		return newCmdErr(codeUsage, "--type must be log, error or event.", "Pass --type log, --type error or --type event.")
+	case kind != "" && kind != kindErrorGroup && !slices.Contains(allKinds, telemetryread.Kind(kind)):
+		return newCmdErr(codeUsage, "--type must be log, error, event or error_group.", "Pass --type log, error, event or error_group.")
+	case kind == kindErrorGroup:
+		return validateGroupGet(id, maxPayload)
+	case kind == "" && refRE.MatchString(id):
+		return validateGroupGet(id, maxPayload)
 	case !uuidRE.MatchString(id) && !traceIDRE.MatchString(id):
-		return newCmdErr(codeUsage, "That isn't an entry id.", "Pass a log or error id (a UUID) or an event's 32-character trace id.").with("id", id)
+		return newCmdErr(codeUsage, "That isn't an entry id.", "Pass a log or error id (a UUID), an event's 32-character trace id, or an error group's reference such as POOL-PUMP-4F2A9C1B.").with("id", id)
 	}
 	return nil
 }

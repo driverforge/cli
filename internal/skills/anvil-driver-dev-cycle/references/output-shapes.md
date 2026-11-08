@@ -31,7 +31,19 @@ contract; messages are not. Branch on codes.
 - `wait` is present only when the read waited. `reason` is `until_match`,
   `min_events` or `timeout`; `transport` is `subscription` or `polling`.
 
-`get` writes `{"scope", "entry", "warnings"}`.
+`get` writes `{"scope", "entry", "warnings"}`, or for an error group
+`{"scope", "error_group", "warnings"}`:
+
+| Field | Meaning |
+| --- | --- |
+| `ref`, `fingerprint` | The group's reference and its fingerprint |
+| `type`, `message` | The error's type and message |
+| `count` | Occurrences retained |
+| `first_seen`, `last_seen` | RFC 3339 UTC |
+| `driver_versions`, `drivers`, `devices[]` | Where it occurred; each device is `{"id", "name"}` |
+| `latest_event` | The callback the newest occurrence was raised in, or null |
+| `latest_stacktrace` | The newest occurrence's stack trace, as stored |
+| `latest_occurrence` | `{"id", "command"}`: the `get` command for the newest occurrence, with its arguments and last log. Null when unknown |
 
 ## Entry
 
@@ -85,7 +97,7 @@ to stdout and the same as a line on stderr.
 | `project_not_found` | 5 | No accessible project matches `--project` |
 | `device_not_found` | 5 | No device in the org matches `--device` |
 | `rate_limited` | 6 | Too many requests; `details.retry_after_ms` when known |
-| `entry_not_found` | 1 | `get` found no entry with that id in the project |
+| `entry_not_found` | 1 | `get` found no entry with that id, or no error group with that reference, in the project |
 | `connection_lost` | 1 | Driverforge couldn't be reached, or a live stream dropped |
 | `service_unavailable` | 1 | Driverforge answered with a temporary error |
 | `internal_error` | 1 | A bug; `reference` identifies the report |

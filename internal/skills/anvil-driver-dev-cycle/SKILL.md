@@ -51,7 +51,7 @@ Pick the job from the question you are answering. Each has a section in
 | Discover vendor API behaviour | What does this API actually return? | A log of the raw response at receipt, read with `logs --until-match` |
 | Discover runtime behaviour | Which callbacks fire after a UI action, with what arguments, in what order? | `events` — every callback is recorded automatically |
 | Verify a change | Did my edit do what I intended? | The same trigger on the new version, compared with `--version <previous>` |
-| Diagnose a failure | Why did this error occur? | `errors`, then `logs --correlation-id <id>` |
+| Diagnose a failure | Why did this error occur? | `errors`, or `get <ref>` for a quoted reference like `POOL-PUMP-4F2A9C1B`; then `logs --correlation-id <id>` |
 | Validate before shipping | Does every scenario behave, with no new errors? | Scripted reads branching on exit codes |
 | Understand timing and order | What happens when, and how long does it take? | `timestamp`, `duration_ms` and `correlation_id` across entries |
 | Verify startup behaviour | What does the driver do when it loads? | `events --name OnDriverLateInit` and the logs inside it, right after deploy |

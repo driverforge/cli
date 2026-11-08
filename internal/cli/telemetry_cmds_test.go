@@ -32,6 +32,9 @@ type fakeGraph struct {
 	// lastSeen is when each device was last heard from, by name; unset is
 	// a moment ago.
 	lastSeen map[string]time.Time
+	// group is the error group errorGroupByFingerprint returns, by
+	// fingerprint.
+	group map[string]map[string]any
 }
 
 func (g *fakeGraph) handler(t *testing.T) http.HandlerFunc {
@@ -64,6 +67,14 @@ func (g *fakeGraph) handler(t *testing.T) http.HandlerFunc {
 				d["lastSeenAt"] = seen.UTC().Format(time.RFC3339Nano)
 			}
 			reply(map[string]any{"deployableDevices": devices})
+		case strings.Contains(q, "errorGroupByFingerprint"):
+			g.vars = append(g.vars, req.Variables)
+			fp, _ := req.Variables["fingerprint"].(string)
+			if grp, ok := g.group[fp]; ok {
+				reply(map[string]any{"errorGroupByFingerprint": grp})
+			} else {
+				reply(map[string]any{"errorGroupByFingerprint": nil})
+			}
 		case g.fail != "":
 			_ = json.NewEncoder(w).Encode(map[string]any{"errors": []map[string]any{{"message": g.fail}}})
 		case strings.Contains(q, "logs("):

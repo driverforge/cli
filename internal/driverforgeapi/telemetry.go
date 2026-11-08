@@ -227,3 +227,38 @@ func (c *Client) ErrorOccurrence(ctx context.Context, projectIDs []string, id st
 	err := c.doLimit(ctx, errorQuery, map[string]any{"projectIds": projectIDs, "id": id}, &data, telemetryResponseLimit)
 	return data.Error, err
 }
+
+// ErrorGroup is every occurrence of one error in a project, grouped by
+// fingerprint. Ref is its quotable reference, <PROJECT-SLUG>-<FINGERPRINT>.
+// Times are epoch milliseconds; LatestStacktrace is the server's JSON.
+type ErrorGroup struct {
+	Fingerprint         string          `json:"fingerprint"`
+	Ref                 string          `json:"ref"`
+	Type                string          `json:"type"`
+	Value               string          `json:"value"`
+	Count               int             `json:"count"`
+	FirstSeen           float64         `json:"firstSeen"`
+	LastSeen            float64         `json:"lastSeen"`
+	AffectedVersions    []string        `json:"affectedVersions"`
+	AffectedControllers []string        `json:"affectedControllers"`
+	AffectedDrivers     []string        `json:"affectedDrivers"`
+	LatestEventName     string          `json:"latestEventName"`
+	LatestStacktrace    json.RawMessage `json:"latestStacktrace"`
+	LatestOccurrenceID  string          `json:"latestOccurrenceId"`
+}
+
+const errorGroupQuery = `query($projectId: String!, $fingerprint: String!) {
+  errorGroupByFingerprint(projectId: $projectId, fingerprint: $fingerprint) {
+    fingerprint ref type value count firstSeen lastSeen affectedVersions affectedControllers affectedDrivers latestEventName latestStacktrace latestOccurrenceId
+  }
+}`
+
+// ErrorGroup fetches the project's error group with the fingerprint, however
+// old, or nil when there's none.
+func (c *Client) ErrorGroup(ctx context.Context, projectID, fingerprint string) (*ErrorGroup, error) {
+	var data struct {
+		Group *ErrorGroup `json:"errorGroupByFingerprint"`
+	}
+	err := c.doLimit(ctx, errorGroupQuery, map[string]any{"projectId": projectID, "fingerprint": fingerprint}, &data, telemetryResponseLimit)
+	return data.Group, err
+}

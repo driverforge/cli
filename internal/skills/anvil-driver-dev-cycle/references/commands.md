@@ -76,12 +76,17 @@ wait outcome arrive as JSON lines on stderr. Always bound it with `--timeout`.
 a UUID; an event's id is its 32-character trace id, which is also the
 `correlation_id` of the logs and errors raised inside it.
 
+`driverforge get <ref>` fetches an error group: every occurrence of one error. Its
+reference is `<PROJECT-SLUG>-<FINGERPRINT>`, such as `POOL-PUMP-4F2A9C1B`, the
+form the web app shows and people quote. The reference names its project, and the
+group is found however long ago it last occurred.
+
 | Flag | Meaning |
 | --- | --- |
-| `--type` | `log`, `error` or `event`, to skip the lookup |
+| `--type` | `log`, `error`, `event` or `error_group`, to skip the lookup. A reference is recognised without it |
 | `--org`, `--project` | Scope, as above. `get` reads the whole project, so it takes no device |
 | `-o`, `--output` | `text` or `json` |
-| `--max-payload-bytes` | Cap the payload. Default 0: no cap |
+| `--max-payload-bytes` | Cap an entry's payload. Default 0: no cap. Not for error groups |
 
 The `payload_truncated` warning lists a ready-to-run `get` command for each entry
 it cut.

@@ -190,7 +190,7 @@ func TestSkillsNameOnlyRealCodesAndFields(t *testing.T) {
 		codeUsage, codeInputRequired, codeAuthRequired, codeInterrupted, codeRateLimited,
 		codeConnectionLost, codeUnavailable, codeInternal,
 		codeContextUnresolved, codeContextAmbiguous, codeProjectNotFound,
-		codeDeviceNotFound, codeEntryNotFound, codeNotInitialised,
+		codeDeviceNotFound, codeEntryNotFound, kindErrorGroup, codeNotInitialised,
 		codeBuildFailed, codeAgentUnreachable, codeDeployFailed, codeDeployTimedOut,
 		warnNoEntries, warnRetentionClamped, warnPayloadTruncated, warnTailClamped, warnDeviceSilent,
 		telemetryread.ReasonUntilMatch, telemetryread.ReasonMinEvents,
@@ -202,7 +202,7 @@ func TestSkillsNameOnlyRealCodesAndFields(t *testing.T) {
 		known[c] = true
 	}
 	for _, v := range []any{envelope{}, scopeOut{}, waitOut{}, warning{}, cmdErr{}, truncatedRef{},
-		telemetryread.Truncated{}, shipOut{}, initOut{}, initProjectOut{}, initChangeOut{}} {
+		telemetryread.Truncated{}, shipOut{}, initOut{}, initProjectOut{}, initChangeOut{}, errorGroupOut{}, latestOccurrenceOut{}} {
 		for _, f := range jsonFields(reflect.TypeOf(v)) {
 			known[f] = true
 		}

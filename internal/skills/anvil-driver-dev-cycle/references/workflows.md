@@ -64,6 +64,10 @@ and result. No code change is needed unless the question is about what happens
 
 **Question.** Why did this error occur?
 
+If the developer quotes a reference such as `POOL-PUMP-4F2A9C1B`, start with
+`driverforge get <ref>`: it reads the whole group, however old, and its
+`latest_occurrence.command` fetches the newest occurrence for step 2.
+
 1. `driverforge errors --version <n> --tail 10`.
 2. Read `message`, `payload.type`, `payload.stacktrace`, `payload.args` and
    `payload.lastLog` (the last log line before it was raised).
