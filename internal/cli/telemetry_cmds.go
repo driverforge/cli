@@ -19,9 +19,11 @@ const (
 	defaultTail        = 100
 	defaultWaitTimeout = 30 * time.Second
 	maxWaitTimeout     = 10 * time.Minute
-	// maxLookbackMinutes is the longest look-back the graph accepts (30 days).
-	// The server holds it to the plan's retention.
-	maxLookbackMinutes = 43200
+	// maxLookbackMinutes is the look-back a read asks for when --since doesn't
+	// narrow it: ten years, so the server's clamp to the plan's retention is
+	// the only limit. A smaller constant here hides whatever the plan keeps
+	// beyond it.
+	maxLookbackMinutes = 10 * 365 * 24 * 60
 )
 
 // readFlags are the flags logs, errors and events share.

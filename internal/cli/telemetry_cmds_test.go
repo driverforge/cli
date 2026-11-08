@@ -221,6 +221,20 @@ func TestTextLogArgsCappedBySDK(t *testing.T) {
 	}
 }
 
+// TestReadsAskForMoreThanThirtyDays: with no --since, a read leaves the
+// look-back to the server's clamp to the plan's retention, so an entry older
+// than 30 days on a longer plan is still found.
+func TestReadsAskForMoreThanThirtyDays(t *testing.T) {
+	g := &fakeGraph{}
+	dir := telemetryEnv(t, g)
+	if _, _, code := run(t, dir, "logs", "--org", "acme", "--project", "smart-tv", "--device", "bench-a"); code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	if got, _ := g.vars[0]["timeRangeMinutes"].(float64); got <= 30*24*60 {
+		t.Errorf("timeRangeMinutes = %v, want more than 30 days", got)
+	}
+}
+
 func TestLogsFlagsAloneWorkOutsideARepo(t *testing.T) {
 	g := &fakeGraph{logs: []map[string]any{logRow("l1", 1000, "first", "12")}}
 	dir := telemetryEnv(t, g)
