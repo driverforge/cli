@@ -62,6 +62,7 @@ type follower struct {
 }
 
 func (f *follower) emit(e telemetryread.Entry) {
+	e.FillRef(f.scope.project.Slug)
 	if telemetryread.Truncate(&e, f.opts.maxPayload) {
 		f.truncated = append(f.truncated, truncatedRef{ID: e.ID, Command: getCommand(e, f.scope)})
 	}

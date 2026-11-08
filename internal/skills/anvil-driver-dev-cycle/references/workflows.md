@@ -70,7 +70,10 @@ If the developer quotes a reference such as `POOL-PUMP-4F2A9C1B`, start with
 
 1. `driverforge errors --version <n> --tail 10`.
 2. Read `message`, `payload.type`, `payload.stacktrace`, `payload.args` and
-   `payload.lastLog` (the last log line before it was raised).
+   `payload.lastLog` (the last log line before it was raised). For its history,
+   `driverforge get <ref>` with the entry's `ref`: how often it has occurred,
+   since when, and on which versions and devices. Quote the `ref` to the
+   developer; it's the name the web app shows.
 3. Pull the surrounding trail: `driverforge logs --correlation-id <correlation_id>`
    and `driverforge events --correlation-id <correlation_id>`.
 4. Form the cause from that evidence, fix it, redeploy, repeat the trigger.

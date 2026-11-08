@@ -189,10 +189,12 @@ type truncatedRef struct {
 }
 
 // truncate caps every entry's payload, returning the payload_truncated warning
-// when any was cut.
+// when any was cut. It also completes each error's group reference, since
+// every entry a read or get writes passes through here.
 func truncateEntries(entries []telemetryread.Entry, limit int, s *telemetryScope) *warning {
 	var refs []truncatedRef
 	for i := range entries {
+		entries[i].FillRef(s.project.Slug)
 		if telemetryread.Truncate(&entries[i], limit) {
 			refs = append(refs, truncatedRef{ID: entries[i].ID, Command: getCommand(entries[i], s)})
 		}
@@ -233,6 +235,9 @@ func writeTextEntry(w io.Writer, e telemetryread.Entry) {
 	}
 	if e.Status != nil {
 		head = append(head, *e.Status)
+	}
+	if e.Ref != nil {
+		head = append(head, *e.Ref)
 	}
 	if e.Message != nil {
 		head = append(head, *e.Message)

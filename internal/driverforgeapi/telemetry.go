@@ -120,6 +120,7 @@ type ErrorEntry struct {
 	LastLog       string          `json:"lastLog"`
 	TraceID       string          `json:"traceId"`
 	Fingerprint   string          `json:"fingerprint"`
+	Ref           string          `json:"ref"`
 	Driver        string          `json:"driver"`
 	DriverVersion string          `json:"driverVersion"`
 	Controller    string          `json:"controller"`
@@ -128,7 +129,7 @@ type ErrorEntry struct {
 const (
 	logFields   = `id createdAt level message args argsTruncated traceId eventName driver driverVersion controller`
 	eventFields = `traceId name args result startedAt finishedAt duration status errorId lastLog driver driverVersion controller`
-	errorFields = `id createdAt type value stacktrace args eventName lastLog traceId fingerprint driver driverVersion controller`
+	errorFields = `id createdAt type value stacktrace args eventName lastLog traceId fingerprint ref driver driverVersion controller`
 	pageFields  = `hasMore cursor totalCount windowMinutes`
 )
 

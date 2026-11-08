@@ -113,6 +113,41 @@ func TestLogArgsArePayload(t *testing.T) {
 	}
 }
 
+// TestErrorRef: an error carries its group reference, from the server or, on
+// the live stream, built from the project slug; logs and events never do.
+func TestErrorRef(t *testing.T) {
+	e := FromError(driverforgeapi.ErrorEntry{ID: "e1", Fingerprint: "4f2a9c1b", Ref: "POOL-PUMP-4F2A9C1B"}, nil)
+	e.FillRef("other")
+	if e.Ref == nil || *e.Ref != "POOL-PUMP-4F2A9C1B" {
+		t.Errorf("server ref = %v, want it kept", e.Ref)
+	}
+
+	pub := `{"type":"error","errorType":"lua:runtime_error","id":"e2","value":"boom","createdAt":1,"controller":"c","fingerprint":"4F2A9C1B"}`
+	e, _ = FromPublication(json.RawMessage(pub), nil)
+	if e.Ref != nil {
+		t.Errorf("publication ref before FillRef = %q", *e.Ref)
+	}
+	e.FillRef("pool-pump")
+	if e.Ref == nil || *e.Ref != "POOL-PUMP-4F2A9C1B" {
+		t.Errorf("filled ref = %v", e.Ref)
+	}
+
+	for _, fp := range []string{"", "4f2a9c1", "not-hex!", "4f2a9c1b00"} {
+		x := FromError(driverforgeapi.ErrorEntry{ID: "e3", Fingerprint: fp}, nil)
+		if x.FillRef("pool-pump"); x.Ref != nil {
+			t.Errorf("fingerprint %q: ref = %q, want none", fp, *x.Ref)
+		}
+	}
+	l := FromLog(driverforgeapi.LogEntry{ID: "l1"}, nil)
+	if l.FillRef("pool-pump"); l.Ref != nil {
+		t.Error("a log got a ref")
+	}
+	b, _ := json.Marshal(l)
+	if !strings.Contains(string(b), `"ref":null`) {
+		t.Errorf("log JSON lacks a null ref: %s", b)
+	}
+}
+
 func TestFromPublication(t *testing.T) {
 	// The live record carries routing and device meta the contract must never
 	// emit; conversion keeps only mapped fields.

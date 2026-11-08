@@ -61,6 +61,7 @@ Every key is always present, null when it doesn't apply.
 | `status` | null | null | The callback's outcome |
 | `duration_ms` | null | null | How long the callback ran |
 | `error_id` | null | null | The error it raised, if any |
+| `ref` | null | The error group's reference, such as `POOL-PUMP-4F2A9C1B`; null when none can be formed | null |
 | `driver` | The `.c4z` filename | | |
 | `driver_version` | The driver.xml version that produced it | | |
 | `device` | `{"id", "name"}`: the controller's hardware id and display name | | |

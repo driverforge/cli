@@ -14,6 +14,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"math"
+	"regexp"
 	"strings"
 	"time"
 
@@ -56,6 +57,9 @@ type Truncated struct {
 //   - name: the event's name; for a log or error, the event it was raised in.
 //   - level: logs and errors ("error"); null for events.
 //   - status, duration_ms, error_id: events only.
+//   - ref: an error's group reference, <PROJECT-SLUG>-<FINGERPRINT>, which
+//     `driverforge get` takes; null for logs and events, and for an error
+//     whose fingerprint can't form one.
 type Entry struct {
 	ID            string          `json:"id"`
 	Type          Kind            `json:"type"`
@@ -67,13 +71,15 @@ type Entry struct {
 	Status        *string         `json:"status"`
 	DurationMS    *float64        `json:"duration_ms"`
 	ErrorID       *string         `json:"error_id"`
+	Ref           *string         `json:"ref"`
 	Driver        string          `json:"driver"`
 	DriverVersion *string         `json:"driver_version"`
 	Device        Device          `json:"device"`
 	CorrelationID *string         `json:"correlation_id"`
 	Truncated     *Truncated      `json:"truncated"`
 
-	at time.Time // the entry's own time, for ordering and windows
+	at          time.Time // the entry's own time, for ordering and windows
+	fingerprint string    // an error's grouping hash, for FillRef
 }
 
 // Time is the entry's own timestamp: when a log or error was raised, when an
@@ -84,7 +90,7 @@ func (e Entry) Time() time.Time { return e.at }
 // the encoder to it, so a field reaches users only by being added here.
 var AllowedKeys = []string{
 	"id", "type", "timestamp", "level", "name", "message", "payload", "status",
-	"duration_ms", "error_id", "driver", "driver_version", "device",
+	"duration_ms", "error_id", "ref", "driver", "driver_version", "device",
 	"correlation_id", "truncated",
 }
 
@@ -228,8 +234,26 @@ func FromError(e driverforgeapi.ErrorEntry, names Names) Entry {
 		DriverVersion: opt(e.DriverVersion),
 		Device:        device(e.Controller, names),
 		CorrelationID: opt(e.TraceID),
+		Ref:           opt(e.Ref),
 		at:            at,
+		fingerprint:   e.Fingerprint,
 	}
+}
+
+// canonicalFingerprint is the grouping hash ingestion mints: eight lowercase
+// hex characters. Only that form makes a reference.
+var canonicalFingerprint = regexp.MustCompile(`^[0-9a-f]{8}$`)
+
+// FillRef sets an error's reference from its project's slug when the server
+// didn't send one, as the live stream doesn't. It follows the server's rule:
+// the slug and fingerprint, upper-cased, joined by a hyphen.
+func (e *Entry) FillRef(projectSlug string) {
+	fp := strings.ToLower(strings.TrimSpace(e.fingerprint))
+	if e.Type != KindError || e.Ref != nil || projectSlug == "" || !canonicalFingerprint.MatchString(fp) {
+		return
+	}
+	ref := strings.ToUpper(projectSlug) + "-" + strings.ToUpper(fp)
+	e.Ref = &ref
 }
 
 // FromPublication converts a live-stream publication, the same record the web
