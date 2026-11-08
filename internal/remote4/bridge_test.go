@@ -112,7 +112,7 @@ done
 	if e := collect(t, b.Events(), EventStubOnline, time.Second); e.Message.Driver != "x.c4z" {
 		t.Errorf("online event lost the driver name: %+v", e.Message)
 	}
-	if err := b.Load(); err != nil {
+	if err := b.Load(nil); err != nil {
 		t.Fatal(err)
 	}
 	if e := collect(t, b.Events(), EventReady, 2*time.Second); len(e.Message.Handlers) != 1 {
@@ -247,4 +247,24 @@ func TestWatchReportsChanges(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("no change reported")
 	}
+}
+
+// The MQTT client delivers on its own goroutines, so a message can arrive
+// after Run has returned and closed Events — at Ctrl+C, say. It must be
+// dropped, not panic with a send on the closed channel.
+func TestBridgeDropsMessagesAfterRunReturns(t *testing.T) {
+	rt := startFake(t, `while read line; do :; done`)
+	broker := NewMemoryBroker()
+	b := NewBridge(rt, broker, "user-1", "sess-1")
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { _ = b.Run(ctx); close(done) }()
+	time.Sleep(50 * time.Millisecond) // let Run subscribe
+	cancel()
+	<-done
+	for range b.Events() {
+	}
+
+	broker.Deliver(Topic("user-1", "sess-1", TopicStatus), []byte(`{"v":1,"type":"log","text":"late"}`))
+	broker.Deliver(Topic("user-1", "sess-1", TopicCallback), []byte(`{"v":1,"id":9,"name":"ReceivedFromProxy","args":[],"argc":0}`))
 }

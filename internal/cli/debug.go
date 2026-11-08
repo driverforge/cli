@@ -45,8 +45,14 @@ code makes against the real controller. Save a file and the next callback runs
 the new code. Attach your usual Lua debugger to the local process.
 
 Ctrl+C ends the session; run 'driverforge deploy' to restore your driver.`,
-		Args: cobra.NoArgs,
+		Args:   cobra.NoArgs,
+		Hidden: !experimental("debug"),
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if !experimental("debug") {
+				return clierr.WithCode(clierr.UserT("Not available yet",
+					"driverforge debug isn't available in this release",
+					"it's coming soon"), codeNotAvailable)
+			}
 			return runDebug(cmd, o)
 		},
 	}
@@ -108,8 +114,8 @@ func prepareDebug(ctx context.Context, out io.Writer, o debugOptions) (debugEnv,
 			return env, clierr.WithCode(clierr.WrapT(err, "Session expired", "your sign-in has expired, so the debug session can't start",
 				"run `driverforge login`, then `driverforge debug` again"), codeAuthRequired)
 		}
-		if ctx.Err() != nil {
-			return env, err
+		if ctx.Err() != nil || clierr.IsUser(err) {
+			return env, err // already says what went wrong — don't flatten it to "unreachable"
 		}
 		return env, clierr.WithCode(clierr.WrapT(err, "Driverforge unreachable", "couldn't reach Driverforge to start the debug session",
 			"check your connection and try again"), codeConnectionLost)
@@ -370,7 +376,7 @@ func onDebugEvent(out io.Writer, bridge *remote4.Bridge, e remote4.Event, stubHa
 			return nil
 		}
 		*loadSent = true
-		if err := bridge.Load(); err != nil {
+		if err := bridge.Load(e.Message.Ctx); err != nil {
 			return clierr.Wrap(err, "couldn't start the driver locally", "")
 		}
 	case remote4.EventReady:

@@ -23,6 +23,34 @@ local function pack(...) return { n = select('#', ...), ... } end
 
 local cfg = REMOTE4 or error('REMOTE4 config missing: this file is meant to be bundled by driverforge debug', 0)
 
+-- Director's constant tables (C4SystemEvents and the like) exist only here on
+-- the controller. Capture every flat, data-only global before the stub or the
+-- SDK defines any, so the local runtime can install the same values.
+local function directorConstants()
+    local skip = { REMOTE4 = true, Properties = true, PersistData = true, _G = true, arg = true }
+    local function scalar(v)
+        local t = type(v)
+        return t == 'number' or t == 'string' or t == 'boolean'
+    end
+    local out = {}
+    for name, v in pairs(_G) do
+        if type(name) == 'string' and not skip[name] then
+            if scalar(v) then
+                out[name] = v
+            elseif type(v) == 'table' and getmetatable(v) == nil then
+                local flat, count = true, 0
+                for k, x in pairs(v) do
+                    count = count + 1
+                    if count > 2000 or type(k) ~= 'string' or not scalar(x) then flat = false break end
+                end
+                if flat and count > 0 then out[name] = v end
+            end
+        end
+    end
+    return out
+end
+local constants = directorConstants()
+
 local PROTOCOL_VERSION = 1
 local MAX_QUEUED_CALLBACKS = 200
 local RECONNECT_BASE_MS = 1000
@@ -59,6 +87,17 @@ local function ref(v)
     return { ['$ref'] = state.nextRef, ['$type'] = type(v) }
 end
 
+-- JSON object keys are strings, so a map keyed by anything else — GetDevices'
+-- { [deviceid] = {...} } — would arrive keyed by "123" and miss every numeric
+-- lookup. Such a table travels as { ["$kv"] = { {k, v}, ... } } instead.
+local function hasNonStringKey(v)
+    if json.arrayLength(v) then return false end
+    for k in pairs(v) do
+        if type(k) ~= 'string' then return true end
+    end
+    return false
+end
+
 local encodeValue
 encodeValue = function(v, depth)
     local t = type(v)
@@ -66,6 +105,13 @@ encodeValue = function(v, depth)
     if t == 'table' then
         if getmetatable(v) ~= nil then return ref(v) end
         if (depth or 0) > 32 then return ref(v) end
+        if hasNonStringKey(v) then
+            local pairsOut = {}
+            for k, x in pairs(v) do
+                pairsOut[#pairsOut + 1] = { encodeValue(k, (depth or 0) + 1), encodeValue(x, (depth or 0) + 1) }
+            end
+            return { ['$kv'] = pairsOut }
+        end
         local out = {}
         for k, x in pairs(v) do out[k] = encodeValue(x, (depth or 0) + 1) end
         if type(v.n) == 'number' then out.n = v.n end
@@ -96,6 +142,14 @@ decodeValue = function(v)
         local obj = state.refs[v['$ref']]
         if obj == nil then error('unknown object reference ' .. tostring(v['$ref']), 0) end
         return obj
+    end
+    if v['$kv'] ~= nil then
+        local out = {}
+        for _, kv in ipairs(v['$kv']) do
+            local k = decodeValue(kv[1])
+            if k ~= nil then out[k] = decodeValue(kv[2]) end
+        end
+        return out
     end
     local out = {}
     for k, x in pairs(v) do
@@ -200,6 +254,35 @@ end
 
 -- Inbound messages ----------------------------------------------------------
 
+-- A log line from the driver running on the laptop, sent to Anvil through
+-- this stub's SDK, the one that has verified the agent.
+local FORWARDED_LEVELS = { FATAL = true, ERROR = true, WARN = true, INFO = true, DEBUG = true, TRACE = true }
+
+local function forwardDriverLog(msg)
+    if not (Anvil and Anvil.ForwardLog and FORWARDED_LEVELS[msg.level]) then return end
+    local ok, args = pcall(decodeList, msg.args, msg.argc)
+    if ok then Anvil:ForwardLog(msg.level, unpack(args, 1, args.n)) end
+end
+
+-- An error from the driver on the laptop, with the structured trace captured
+-- there. JSON arrays arrive carrying a count (`n`) that the SDK must not see.
+local function plain(v)
+    if type(v) ~= 'table' then return v end
+    local out = {}
+    for k, x in pairs(v) do
+        if not (k == 'n' and type(x) == 'number') then out[k] = plain(x) end
+    end
+    return out
+end
+
+local function forwardDriverError(msg)
+    if not (Anvil and Anvil.CaptureError) or msg.error == nil then return end
+    -- Without a trace the SDK would capture one here, of the stub's frames.
+    local trace = type(msg.trace) == 'table' and plain(msg.trace)
+        or { schemaVersion = 1, captureKind = 'exception', status = 'failed', reasons = { 'capture_failed' } }
+    Anvil:CaptureError(tostring(msg.error), trace, { eventName = msg.name })
+end
+
 local function handleControl(msg)
     if msg.type == 'token' and type(msg.token) == 'string' then
         state.token = msg.token
@@ -209,6 +292,10 @@ local function handleControl(msg)
         state.queue = {}
         Log:Info('Debug session ended. Run `driverforge deploy` to restore the real driver.')
         if state.client then pcall(function() state.client:Disconnect() end) end
+    elseif msg.type == 'log' then
+        forwardDriverLog(msg)
+    elseif msg.type == 'error' then
+        forwardDriverError(msg)
     end
 end
 
@@ -280,7 +367,8 @@ end
 
 local function announce()
     send('status', { type = 'online', stub = tostring(cfg.stubVersion or 'dev'),
-        driver = driverFilename(), handlers = { n = #cfg.handlers, unpack(cfg.handlers) } })
+        driver = driverFilename(), handlers = { n = #cfg.handlers, unpack(cfg.handlers) },
+        ctx = { env = constants } })
 end
 
 local scheduleReconnect
@@ -317,12 +405,6 @@ local function connect()
     end)
 
     client:OnMessage(onMessage)
-
-    if client.OnLog then
-        pcall(function()
-            client:OnLog(function(_, level, line) Log:Trace('mqtt ' .. tostring(level) .. ': ' .. tostring(line)) end)
-        end)
-    end
 
     pcall(function()
         client:SetWill(topic('status'), json.encode({ v = PROTOCOL_VERSION, type = 'offline' }), 1, false)
@@ -406,7 +488,7 @@ end
 
 Remote4 = {
     _internals = {
-        state = state, topic = topic, encodeValue = encodeValue, decodeValue = decodeValue,
+        state = state, topic = topic, encodeValue = encodeValue, decodeValue = decodeValue, constants = constants,
         execute = execute, forward = forward, onMessage = onMessage, handleMessage = handleMessage,
     },
 }

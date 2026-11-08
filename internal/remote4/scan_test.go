@@ -40,12 +40,13 @@ function ToFunctionName(s) end             -- a helper, not a callback
 `)
 	write("lib/handlers.lua", "function ExecuteCommand(cmd, params) end\n")
 	write("vendor/driverforge-sdk.lua", "function UIRequest() end\nfunction OnDriverLateInit() end\n")
-	write(".hidden/x.lua", "function OnSystemEvent() end\n")
+	write("vendor/framework/global/handlers.lua", "function OnSystemEvent(event) end\n")
+	write(".hidden/x.lua", "function OnBindingChanged() end\n")
 	got, err := ScanHandlers(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"ExecuteCommand", "OnDriverInit", "OnPropertyChanged", "ReceivedFromProxy"}
+	want := []string{"ExecuteCommand", "OnDriverInit", "OnPropertyChanged", "OnSystemEvent", "ReceivedFromProxy"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("ScanHandlers = %v, want %v", got, want)
 	}

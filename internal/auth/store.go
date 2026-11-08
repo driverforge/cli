@@ -41,18 +41,60 @@ type Credentials struct {
 	Email        string    `json:"email,omitempty"`
 	Name         string    `json:"name,omitempty"`
 	Issuer       string    `json:"issuer,omitempty"`
-	// AudienceTokens caches audience-narrowed access tokens across invocations,
-	// keyed by audience. Minting one is a ~800ms refresh-token grant, so without
-	// this every `deploy`/`sync` process pays it on its first authed call. They
-	// are shorter-lived and less powerful than the RefreshToken already in this
-	// bundle, so persisting them here adds no meaningful exposure.
-	AudienceTokens map[string]AudienceToken `json:"audienceTokens,omitempty"`
 }
 
 // AudienceToken is a persisted audience-narrowed access token and its expiry.
+// Minting one is a ~800ms refresh-token grant, so caching it across invocations
+// spares every `deploy`/`sync` process that cost on its first authed call. They
+// are shorter-lived and less powerful than the refresh token, so persisting them
+// adds no meaningful exposure.
+//
+// Each audience is its own entry beside the credentials, never inside them: an
+// access token is ~1.3KB and the macOS keychain refuses an item over ~3KB, so a
+// bundle carrying two of them fails to save — and that save is the one carrying
+// the rotated refresh token. Subject binds the token to the sign-in that minted
+// it, so a token left behind by another account is never reused.
 type AudienceToken struct {
 	AccessToken string    `json:"accessToken"`
 	Expiry      time.Time `json:"expiry"`
+	Subject     string    `json:"subject,omitempty"`
+}
+
+// audienceAccount is the store account for an audience's cached token: the
+// credentials account suffixed with the audience, so environments stay apart.
+func audienceAccount(audience string) string {
+	return authHost() + "#" + audience
+}
+
+// loadAudienceToken returns the cached token for audience, if one is stored.
+func loadAudienceToken(audience string) (AudienceToken, bool) {
+	raw, err := selectBackend().get(audienceAccount(audience))
+	if err != nil {
+		return AudienceToken{}, false
+	}
+	var at AudienceToken
+	if json.Unmarshal([]byte(raw), &at) != nil {
+		return AudienceToken{}, false
+	}
+	return at, true
+}
+
+// saveAudienceToken caches at for audience.
+func saveAudienceToken(audience string, at AudienceToken) error {
+	data, err := json.Marshal(at)
+	if err != nil {
+		return err
+	}
+	return selectBackend().set(audienceAccount(audience), string(data))
+}
+
+// clearAudienceTokens drops every cached audience token, best-effort: a token
+// that survives is still bound to its subject and expires on its own.
+func clearAudienceTokens() {
+	b := selectBackend()
+	for _, aud := range []string{resolveAgentAudience(), resolveMQTTAudience()} {
+		_ = b.del(audienceAccount(aud))
+	}
 }
 
 // backend abstracts where credentials live so we can prefer the OS keychain and
@@ -107,6 +149,7 @@ func Load() (Credentials, error) {
 
 // Delete removes the stored credentials. It is idempotent.
 func Delete() error {
+	clearAudienceTokens()
 	err := selectBackend().del(authHost())
 	if errors.Is(err, keyring.ErrNotFound) || errors.Is(err, os.ErrNotExist) {
 		return nil

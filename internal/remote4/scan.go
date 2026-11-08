@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 	"sync"
+
+	"github.com/driverforge/cli/internal/sdkrelease"
 )
 
 var (
@@ -40,8 +42,10 @@ var (
 // known Director callbacks. It runs before the driver does — the driver cannot
 // run until the stub is live — so it is static and may over-approximate (a
 // handler defined inside a comment, say); the stub forwarding a callback the
-// driver turns out not to handle is harmless. Vendored modules under
-// vendor/ are skipped: the SDK defines wrappers for every callback.
+// driver turns out not to handle is harmless. Vendored libraries are scanned —
+// a framework such as drivers-common-public defines the driver's real
+// handlers — except the Driverforge SDK, which defines a wrapper for every
+// callback.
 func ScanHandlers(srcDir string) ([]string, error) {
 	found := map[string]bool{}
 	err := filepath.WalkDir(srcDir, func(path string, d os.DirEntry, err error) error {
@@ -50,12 +54,12 @@ func ScanHandlers(srcDir string) ([]string, error) {
 		}
 		if d.IsDir() {
 			name := d.Name()
-			if path != srcDir && (strings.HasPrefix(name, ".") || name == "vendor" || name == "dist") {
+			if path != srcDir && (strings.HasPrefix(name, ".") || name == "dist") {
 				return filepath.SkipDir
 			}
 			return nil
 		}
-		if !strings.HasSuffix(d.Name(), ".lua") {
+		if !strings.HasSuffix(d.Name(), ".lua") || d.Name() == sdkrelease.BundleName {
 			return nil
 		}
 		src, err := os.ReadFile(path)

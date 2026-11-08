@@ -84,23 +84,19 @@ func AccessTokenForAudience(ctx context.Context, audience string) (string, error
 		return "", err
 	}
 
-	// Persist the rotated refresh token (keep the union access token for graph)
-	// and the freshly minted audience token, in one write. The rotated refresh
-	// token is critical — the old one is spent server-side, so a failed save
-	// would brick the next refresh — whereas the audience token is a cache, so a
-	// failed save there only costs a re-grant next time. Distinguish the two.
+	// Persist the rotated refresh token (keep the union access token for graph),
+	// then cache the freshly minted audience token in its own entry. The rotated
+	// refresh token is critical — the old one is spent server-side, so a failed
+	// save would brick the next refresh — whereas the audience token is a cache,
+	// so a failed save there only costs a re-grant next time.
 	expiry := time.Now().Add(time.Duration(tok.ExpiresIn) * time.Second)
-	rotated := tok.RefreshToken != "" && tok.RefreshToken != c.RefreshToken
-	if rotated {
+	if tok.RefreshToken != "" && tok.RefreshToken != c.RefreshToken {
 		c.RefreshToken = tok.RefreshToken
+		if err := Save(c); err != nil {
+			return "", signInUnavailableError(fmt.Errorf("saving rotated refresh token: %w", err))
+		}
 	}
-	if c.AudienceTokens == nil {
-		c.AudienceTokens = map[string]AudienceToken{}
-	}
-	c.AudienceTokens[audience] = AudienceToken{AccessToken: tok.AccessToken, Expiry: expiry}
-	if err := Save(c); err != nil && rotated {
-		return "", signInUnavailableError(fmt.Errorf("saving rotated refresh token: %w", err))
-	}
+	_ = saveAudienceToken(audience, AudienceToken{AccessToken: tok.AccessToken, Expiry: expiry, Subject: c.Subject})
 
 	cacheAudienceToken(audience, tok.AccessToken, expiry)
 	return tok.AccessToken, nil
@@ -168,12 +164,12 @@ func requestAudienceToken(ctx context.Context, refreshToken, audience string) (a
 	return tok, nil
 }
 
-// persistedAudienceToken returns a cross-process-persisted audience token from c
-// when present and still comfortably valid (same expiry margin as the in-memory
-// cache), so callers can skip the grant.
+// persistedAudienceToken returns a cross-process-persisted audience token for
+// c's sign-in when present and still comfortably valid (same expiry margin as
+// the in-memory cache), so callers can skip the grant.
 func persistedAudienceToken(c Credentials, audience string) (string, time.Time, bool) {
-	at, ok := c.AudienceTokens[audience]
-	if !ok || at.AccessToken == "" || time.Until(at.Expiry) < refreshWindow {
+	at, ok := loadAudienceToken(audience)
+	if !ok || at.AccessToken == "" || at.Subject != c.Subject || time.Until(at.Expiry) < refreshWindow {
 		return "", time.Time{}, false
 	}
 	return at.AccessToken, at.Expiry, true

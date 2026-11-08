@@ -46,6 +46,8 @@ local function arrayLength(t)
     return n
 end
 
+M.arrayLength = arrayLength
+
 local function encodeNumber(v)
     if v ~= v or v == math.huge or v == -math.huge then return 'null' end
     if v % 1 == 0 and math.abs(v) < 1e15 then return string.format('%d', v) end

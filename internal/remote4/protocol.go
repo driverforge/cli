@@ -47,9 +47,10 @@ type Message struct {
 	Results json.RawMessage `json:"results,omitempty"`
 
 	// responses
-	OK      *bool  `json:"ok,omitempty"`
-	Handled *bool  `json:"handled,omitempty"`
-	Error   string `json:"error,omitempty"`
+	OK      *bool           `json:"ok,omitempty"`
+	Handled *bool           `json:"handled,omitempty"`
+	Error   string          `json:"error,omitempty"`
+	Trace   json.RawMessage `json:"trace,omitempty"` // forwarded errors: the SDK's structured trace
 
 	// control / status / runtime chatter
 	Token    string          `json:"token,omitempty"`

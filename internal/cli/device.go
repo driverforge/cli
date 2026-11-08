@@ -321,7 +321,7 @@ func newDeviceShowCmd() *cobra.Command {
 func noActiveDevicesErr(orgName string) error {
 	return clierr.WithCode(clierr.UserT("No devices",
 		fmt.Sprintf("No active devices in %s yet.", orgName),
-		"register a controller (install the Anvil Agent) first",
+		"register a controller by installing the Anvil Agent on it — see "+agentInstallURL,
 	), codeNoDevices)
 }
 

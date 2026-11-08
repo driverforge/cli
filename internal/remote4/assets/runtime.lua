@@ -28,6 +28,7 @@ do
         if a == '--src' then opts.src = args[i + 1]; i = i + 2
         elseif a == '--entry' then opts.entry = args[i + 1]; i = i + 2
         elseif a == '--config' then opts.config = args[i + 1]; i = i + 2
+        elseif a == '--modules' then opts.modules = args[i + 1]; i = i + 2
         elseif a == '--mobdebug' then opts.mobdebug = args[i + 1] or 'localhost:8172'; i = i + 2
         else i = i + 1 end
     end
@@ -101,6 +102,17 @@ local function newProxy(id, typ)
     return proxy
 end
 
+-- JSON object keys are strings, so a map keyed by anything else — GetDevices'
+-- { [deviceid] = {...} } — would arrive keyed by "123" and miss every numeric
+-- lookup. Such a table travels as { ["$kv"] = { {k, v}, ... } } instead.
+local function hasNonStringKey(v)
+    if json.arrayLength(v) then return false end
+    for k in pairs(v) do
+        if type(k) ~= 'string' then return true end
+    end
+    return false
+end
+
 local encodeValue
 encodeValue = function(v, depth)
     local t = type(v)
@@ -118,6 +130,13 @@ encodeValue = function(v, depth)
     if t == 'table' then
         if proxyRef[v] then return { ['$ref'] = proxyRef[v] } end
         if (depth or 0) > 32 then error('remote4: value nests too deeply to send', 0) end
+        if hasNonStringKey(v) then
+            local pairsOut = {}
+            for k, x in pairs(v) do
+                pairsOut[#pairsOut + 1] = { encodeValue(k, (depth or 0) + 1), encodeValue(x, (depth or 0) + 1) }
+            end
+            return { ['$kv'] = pairsOut }
+        end
         local out = {}
         for k, x in pairs(v) do out[k] = encodeValue(x, (depth or 0) + 1) end
         if type(v.n) == 'number' then out.n = v.n end
@@ -136,6 +155,14 @@ local decodeValue
 decodeValue = function(v)
     if type(v) ~= 'table' then return v end
     if v['$ref'] ~= nil then return newProxy(v['$ref'], v['$type']) end
+    if v['$kv'] ~= nil then
+        local out = {}
+        for _, kv in ipairs(v['$kv']) do
+            local k = decodeValue(kv[1])
+            if k ~= nil then out[k] = decodeValue(kv[2]) end
+        end
+        return out
+    end
     local out = {}
     for k, x in pairs(v) do
         if k ~= 'n' then out[k] = decodeValue(x) end
@@ -228,11 +255,28 @@ end
 
 local projectModules = {}
 
+-- The squishy's Module declarations: a require resolves to the file the build
+-- bundles under that name, which need not sit at the name's dotted path
+-- (vendored libraries registered under their upstream names).
+local declaredModules = {}
+if opts.modules then
+    local f = io.open(opts.modules, 'r')
+    if f then
+        for line in f:lines() do
+            local name, path = line:match('^([^\t]+)\t(.+)$')
+            if name then declaredModules[name] = path end
+        end
+        f:close()
+    end
+end
+
 -- Lua 5.1 names the searcher list package.loaders; 5.2+ package.searchers.
 local searchers = package.loaders or package.searchers
 table.insert(searchers, 2, function(name)
     local rel = name:gsub('%.', '/')
-    for _, candidate in ipairs({ opts.src .. '/' .. rel .. '.lua', opts.src .. '/' .. rel .. '/init.lua' }) do
+    local candidates = { opts.src .. '/' .. rel .. '.lua', opts.src .. '/' .. rel .. '/init.lua' }
+    if declaredModules[name] then table.insert(candidates, 1, opts.src .. '/' .. declaredModules[name]) end
+    for _, candidate in ipairs(candidates) do
         if fileExists(candidate) then
             local chunk, err = loadfile(candidate)
             if not chunk then error(err, 0) end
@@ -280,15 +324,129 @@ local function handlerNames()
     return names
 end
 
+-- The driver's own SDK runs here without an agent (it could not pass the
+-- agent's verification from this side), so its logger would forward nothing.
+-- Stand in for the SDK's one public entry point instead: Driverforge:Init
+-- wraps the driver's logger exactly as the SDK would, and each line travels to
+-- the stub, whose verified SDK sends it to Anvil. The SDK defines
+-- `Driverforge = Driverforge or {...}`, so this stand-in survives its load.
+local LOG_LEVELS = { 'fatal', 'error', 'warn', 'info', 'debug', 'trace' }
+
+local function wrapLogger(logger, logMap)
+    if type(logger) ~= 'table' or logger._remote4Wrapped then return end
+    for _, level in ipairs(LOG_LEVELS) do
+        local name = logMap and logMap[level]
+        if not name then
+            for _, variant in ipairs({ level, level:sub(1, 1):upper() .. level:sub(2), level:upper() }) do
+                if type(logger[variant]) == 'function' then name = variant break end
+            end
+        end
+        local original = name and logger[name]
+        if type(original) == 'function' then
+            local levelName = level:upper()
+            logger[name] = function(self, ...)
+                -- Colon (`Log:Info(x)`) and dot (`Log.Info(x)`) call styles.
+                local args = self == logger and pack(...) or pack(self, ...)
+                local ok, encoded = pcall(encodeList, args)
+                if ok then emit({ type = 'forward_log', level = levelName, args = encoded, argc = args.n }) end
+                return original(self, ...)
+            end
+        end
+    end
+    logger._remote4Wrapped = true
+end
+
+local function installSDKStandIn()
+    Driverforge = {
+        Init = function(_, _, opts)
+            if type(opts) == 'table' then wrapLogger(opts.logger, opts.logMap) end
+        end,
+    }
+end
+
+-- Errors take the same route as logs: to the stub, whose SDK sends them to
+-- Anvil. Each carries the SDK's own structured trace, captured here while the
+-- failing frames are live, using the SDK's diagnostics module (bundled in the
+-- driver's SDK) so the trace has exactly the shape Anvil expects.
+local firstExceptionTrace -- the deepest capture made during the current call
+
+local function diagnostics()
+    local d = package.loaded['diagnostics']
+    if type(d) == 'table' and type(d.capture) == 'function' then return d end
+end
+
+-- Before late init the SDK catches a handler's error, captures its trace and
+-- rethrows; by the time the error reaches the runtime the original frames are
+-- gone. Remember the first exception trace captured during a call — the
+-- innermost one, at the original throw site — so the runtime reports that.
+local function watchDiagnostics()
+    local d = diagnostics()
+    if not d or d._remote4Watched then return end
+    local capture = d.capture
+    d.capture = function(options)
+        local trace = capture(options)
+        if type(options) == 'table' and options.captureKind == 'exception' and firstExceptionTrace == nil then
+            firstExceptionTrace = trace
+        end
+        return trace
+    end
+    d._remote4Watched = true
+end
+
+local function captureTrace(kind, boundary)
+    local d = diagnostics()
+    if not d then return nil end
+    local ok, trace = pcall(d.capture, { captureKind = kind, boundary = boundary })
+    if ok and type(trace) == 'table' then return trace end
+end
+
+local function forwardError(message, trace, eventName)
+    emit({ type = 'forward_error', error = tostring(message), name = eventName, trace = trace })
+end
+
+-- protect runs fn under xpcall, forwarding any error it raises with its trace.
+-- Returns xpcall's results; the error value is the traceback, as before.
+local function protect(eventName, fn, ...)
+    local args = pack(...)
+    local caught
+    local function onError(err)
+        caught = { message = err, trace = firstExceptionTrace or captureTrace('exception', onError) }
+        if type(err) ~= 'string' then return err end
+        return debug.traceback(err, 2)
+    end
+    firstExceptionTrace = nil
+    watchDiagnostics()
+    local results = pack(xpcall(function() return fn(unpack(args, 1, args.n)) end, onError))
+    firstExceptionTrace = nil
+    if not results[1] and caught then forwardError(caught.message, caught.trace, eventName) end
+    return results
+end
+
+-- A driver's own Anvil:CaptureError calls reach the same place. The SDK's
+-- version runs too, untouched; here it has no agent and sends nothing.
+local function wrapCaptureError()
+    if type(Anvil) ~= 'table' or type(Anvil.CaptureError) ~= 'function' or Anvil._remote4Wrapped then return end
+    local original = Anvil.CaptureError
+    local function relay(self, message, stacktrace, context)
+        local trace = type(stacktrace) == 'table' and stacktrace or captureTrace('callsite', relay)
+        forwardError(message, trace, type(context) == 'table' and context.eventName or nil)
+        return original(self, message, stacktrace, context)
+    end
+    Anvil.CaptureError = relay
+    Anvil._remote4Wrapped = true
+end
+
 local function loadDriver()
+    installSDKStandIn()
     installConfigMapping()
     for name in pairs(projectModules) do package.loaded[name] = nil end
     projectModules = {}
     local path = opts.src .. '/' .. opts.entry
     local chunk, err = loadfile(path)
     if not chunk then return false, err end
-    local ok, runErr = xpcall(chunk, debug.traceback)
-    if not ok then return false, runErr end
+    local results = protect(nil, chunk)
+    if not results[1] then return false, results[2] end
+    wrapCaptureError()
     return true
 end
 
@@ -318,6 +476,15 @@ local loaded = false
 
 -- Dispatch -------------------------------------------------------------------
 
+-- The controller's constant globals, captured by the stub, installed where
+-- the local interpreter has nothing of that name.
+local function installEnvironment(ctx)
+    if type(ctx) ~= 'table' or type(ctx.env) ~= 'table' then return end
+    for name, v in pairs(stripN(ctx.env)) do
+        if _G[name] == nil then _G[name] = v end
+    end
+end
+
 local function installContext(ctx)
     if type(ctx) ~= 'table' then return end
     if type(ctx.properties) == 'table' then Properties = stripN(decodeValue(ctx.properties)) end
@@ -337,7 +504,8 @@ local function dispatch(msg)
         return
     end
     local args = decodeList(msg.args, msg.argc)
-    local results = pack(xpcall(function() return fn(unpack(args, 1, args.n)) end, debug.traceback))
+    wrapCaptureError()
+    local results = protect(msg.name ~= '__fn' and msg.name or nil, fn, unpack(args, 1, args.n))
     if not results[1] then
         emit({ type = 'callback_response', id = msg.id, name = msg.name, ok = false, error = tostring(results[2]) })
         return
@@ -375,6 +543,7 @@ end
 
 handleControlMessage = function(msg)
     if msg.type == 'load' then
+        installEnvironment(msg.ctx)
         pendingLoad = true
     elseif msg.type == 'reload' then
         pendingReload = loaded

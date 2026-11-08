@@ -25,6 +25,10 @@ import (
 // move, because released binaries keep printing this exact URL.
 const agentDocsURL = "https://go.driverforge.com/agent"
 
+// agentInstallURL points at the Anvil Agent installation guide, for a user who
+// has no controller registered yet. Published short link → docs.driverforge.com.
+const agentInstallURL = "https://go.driverforge.com/agent-install"
+
 // classifyDeployRunErr separates the two ways a deploy program dies: the
 // stream deadline expiring is a TIMEOUT — the driver may already be staged on
 // the controller, so "Cancelled — No changes were made" would be a lie — and

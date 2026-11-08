@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"errors"
 	"strings"
 	"testing"
 
@@ -67,6 +68,10 @@ func TestNoActiveDevicesIsFriendly(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "Suru Pty Ltd") {
 		t.Errorf("message should name the org: %q", err.Error())
+	}
+	var ue *clierr.UserError
+	if errors.As(err, &ue) && !strings.Contains(ue.Hint, agentInstallURL) {
+		t.Errorf("hint should link the agent install guide: %q", ue.Hint)
 	}
 }
 

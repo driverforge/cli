@@ -2,6 +2,7 @@ package remote4
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -45,6 +46,11 @@ type Bridge struct {
 
 	mu    sync.Mutex
 	ended bool
+
+	// eventsMu guards closing events: broker callbacks run on the MQTT client's
+	// goroutines and can still deliver after Run has returned.
+	eventsMu     sync.Mutex
+	eventsClosed bool
 }
 
 // NewBridge wires rt and broker together for the session; Run starts relaying.
@@ -58,6 +64,11 @@ func (b *Bridge) Events() <-chan Event { return b.events }
 func (b *Bridge) topic(name string) string { return Topic(b.userID, b.session, name) }
 
 func (b *Bridge) emit(e Event) {
+	b.eventsMu.Lock()
+	defer b.eventsMu.Unlock()
+	if b.eventsClosed {
+		return
+	}
 	select {
 	case b.events <- e:
 	default: // a stalled renderer must not stall the proxy
@@ -67,7 +78,12 @@ func (b *Bridge) emit(e Event) {
 // Run subscribes to the stub's channels and pumps runtime output to the
 // broker until the runtime exits or ctx ends.
 func (b *Bridge) Run(ctx context.Context) error {
-	defer close(b.events)
+	defer func() {
+		b.eventsMu.Lock()
+		b.eventsClosed = true
+		close(b.events)
+		b.eventsMu.Unlock()
+	}()
 
 	fromStub := func(kind EventKind, to string) func(string, []byte) {
 		return func(_ string, payload []byte) {
@@ -138,6 +154,13 @@ func (b *Bridge) fromRuntime(m Message) {
 		b.emit(Event{Kind: EventReloaded, Message: m})
 	case "fatal":
 		b.emit(Event{Kind: EventFatal, Message: m})
+	case "forward_log":
+		// The driver's log line, already printed locally, on its way to Anvil
+		// through the stub's SDK.
+		b.toStub(Message{Type: "log", Level: m.Level, Args: m.Args, Argc: m.Argc}, "a log line")
+	case "forward_error":
+		// The driver's error, already shown locally, on its way to Anvil.
+		b.toStub(Message{Type: "error", Error: m.Error, Name: m.Name, Trace: m.Trace}, "an error")
 	default:
 		b.emit(Event{Kind: EventRuntimeLog, Message: m})
 	}
@@ -150,6 +173,14 @@ func (b *Bridge) publish(name string, m Message) {
 	}
 }
 
+// toStub sends the driver's telemetry to the stub over the control topic, for
+// its SDK to pass to Anvil.
+func (b *Bridge) toStub(m Message, what string) {
+	if err := b.broker.Publish(b.topic(TopicControl), Encode(m)); err != nil {
+		b.emit(Event{Kind: EventStubLog, Err: fmt.Errorf("forwarding %s: %w", what, err)})
+	}
+}
+
 // SendToken pushes a refreshed broker token to the stub for its reconnects.
 func (b *Bridge) SendToken(token string) error {
 	return b.broker.Publish(b.topic(TopicControl), Encode(Message{Type: "token", Token: token}))
@@ -157,7 +188,11 @@ func (b *Bridge) SendToken(token string) error {
 
 // Load tells the runtime to run the driver; sent once the stub is online so
 // file-scope C4 calls have somewhere to go.
-func (b *Bridge) Load() error { return b.rt.Send(Message{Type: "load"}) }
+// Load starts the driver in the runtime. env is the context the stub announced
+// itself with — the controller's constant globals the driver may read.
+func (b *Bridge) Load(env json.RawMessage) error {
+	return b.rt.Send(Message{Type: "load", Ctx: env})
+}
 
 // Reload tells the runtime to re-read the driver source.
 func (b *Bridge) Reload() error { return b.rt.Send(Message{Type: "reload"}) }

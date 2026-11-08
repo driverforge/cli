@@ -154,3 +154,20 @@ func zipWithFiles(t *testing.T, files map[string]string) string {
 	}
 	return path
 }
+
+// The controller's MQTT client logs a line per packet. The SDK ships every Log
+// call to Anvil, so a stub that forwarded those lines flooded the project's
+// logs with its own transport chatter. Connection trouble already arrives via
+// OnConnect/OnDisconnect; the per-packet log must stay unhooked.
+func TestStubLeavesMQTTClientLogUnhooked(t *testing.T) {
+	runStubCheck(t, StubConfig{SessionID: "s", UserID: "u", BrokerHost: "h", BrokerPort: 1883}, `
+local hooked = false
+local client = setmetatable({ OnLog = function() hooked = true end },
+    { __index = function() return function() end end })
+C4 = setmetatable({ MQTT = function() return client end },
+    { __index = function() return function() end end })
+dofile(arg[1])
+OnDriverInit('DIT_STARTUP')
+assert(not hooked, 'stub registered an MQTT client log hook')
+`)
+}

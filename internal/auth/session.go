@@ -21,6 +21,7 @@ func Persist(tok *oauth2.Token) (Credentials, error) {
 	if err := Save(c); err != nil {
 		return Credentials{}, err
 	}
+	clearAudienceTokens() // minted under the previous sign-in
 	return c, nil
 }
 

@@ -2,12 +2,15 @@ package auth
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -116,9 +119,8 @@ func TestAccessTokenForAudiencePersistsAcrossProcesses(t *testing.T) {
 	if tok, err := AccessTokenForAudience(context.Background(), "anvil-agent"); err != nil || tok != "agent-tok" {
 		t.Fatalf("first call: tok=%q err=%v", tok, err)
 	}
-	c, _ := Load()
-	if at, ok := c.AudienceTokens["anvil-agent"]; !ok || at.AccessToken != "agent-tok" {
-		t.Fatalf("audience token not persisted: %+v", c.AudienceTokens)
+	if at, ok := loadAudienceToken("anvil-agent"); !ok || at.AccessToken != "agent-tok" {
+		t.Fatalf("audience token not persisted: %+v", at)
 	}
 
 	// A "new process" — drop the in-memory cache — reuses the persisted token
@@ -140,10 +142,10 @@ func TestAccessTokenForAudienceExpiredPersistedRegrants(t *testing.T) {
 		AccessToken:  "union-tok",
 		RefreshToken: "rt0",
 		Expiry:       time.Now().Add(time.Hour),
-		AudienceTokens: map[string]AudienceToken{
-			"anvil-agent": {AccessToken: "stale-tok", Expiry: time.Now().Add(-time.Minute)},
-		},
 	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := saveAudienceToken("anvil-agent", AudienceToken{AccessToken: "stale-tok", Expiry: time.Now().Add(-time.Minute)}); err != nil {
 		t.Fatal(err)
 	}
 	resetAudCache()
@@ -154,9 +156,84 @@ func TestAccessTokenForAudienceExpiredPersistedRegrants(t *testing.T) {
 	if n := hits(); n != 1 {
 		t.Errorf("expected a re-grant for the expired token, got %d grants", n)
 	}
-	c, _ := Load()
-	if at := c.AudienceTokens["anvil-agent"]; at.AccessToken != "agent-tok" {
+	if at, _ := loadAudienceToken("anvil-agent"); at.AccessToken != "agent-tok" {
 		t.Errorf("re-granted token not persisted: %q", at.AccessToken)
+	}
+}
+
+// Audience tokens are ~1.3KB each and the macOS keychain refuses an item over
+// ~3KB, so the credentials entry — the one carrying the rotated refresh token —
+// must not grow with every audience granted, or the second grant fails to save
+// it and spends the session.
+func TestAudienceTokensStayOutOfTheCredentialsEntry(t *testing.T) {
+	isolate(t)
+	jwt := strings.Repeat("x", 1300)
+	var mu sync.Mutex
+	var n int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		mu.Lock()
+		n++
+		rt := fmt.Sprintf("rt%d", n)
+		mu.Unlock()
+		fmt.Fprintf(w, `{"access_token":%q,"refresh_token":%q,"expires_in":1800}`, jwt, rt)
+	}))
+	t.Cleanup(srv.Close)
+	t.Setenv("DRIVERFORGE_AUTH_URL", srv.URL)
+	if err := Save(Credentials{AccessToken: jwt, RefreshToken: "rt0", Subject: "user-1", Expiry: time.Now().Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, aud := range []string{"anvil-agent", "mqtt-broker"} {
+		if _, err := AccessTokenForAudience(context.Background(), aud); err != nil {
+			t.Fatalf("%s: %v", aud, err)
+		}
+	}
+	raw, err := fileBackend{}.get(authHost())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The keychain base64-encodes the secret; stay well inside its ~3KB item.
+	if enc := base64.StdEncoding.EncodedLen(len(raw)); enc > 2500 {
+		t.Errorf("credentials entry is %d bytes encoded after two audience grants, want it independent of them", enc)
+	}
+	if c, _ := Load(); c.RefreshToken != "rt2" {
+		t.Errorf("refresh token = %q, want the latest rotation rt2", c.RefreshToken)
+	}
+}
+
+// A cached audience token belongs to the sign-in that minted it: one left behind
+// by another account must re-grant, not be handed to this one.
+func TestPersistedAudienceTokenIsBoundToSubject(t *testing.T) {
+	isolate(t)
+	_, hits := grantCounter(t)
+	if err := Save(Credentials{AccessToken: "union-tok", RefreshToken: "rt0", Subject: "user-2", Expiry: time.Now().Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := saveAudienceToken("anvil-agent", AudienceToken{AccessToken: "user-1-tok", Subject: "user-1", Expiry: time.Now().Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	if tok, err := AccessTokenForAudience(context.Background(), "anvil-agent"); err != nil || tok != "agent-tok" {
+		t.Fatalf("tok=%q err=%v, want a fresh grant for user-2", tok, err)
+	}
+	if n := hits(); n != 1 {
+		t.Errorf("expected a grant, got %d", n)
+	}
+}
+
+// Logging out drops the cached audience tokens along with the credentials.
+func TestDeleteClearsAudienceTokens(t *testing.T) {
+	isolate(t)
+	if err := Save(Credentials{AccessToken: "union-tok"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := saveAudienceToken("mqtt-broker", AudienceToken{AccessToken: "mqtt-tok", Expiry: time.Now().Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := Delete(); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := loadAudienceToken("mqtt-broker"); ok {
+		t.Error("audience token survived Delete")
 	}
 }
 

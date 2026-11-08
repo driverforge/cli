@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/driverforge/cli/pkg/c4z/squish"
 )
 
 // RuntimeOptions describes the local Lua process to start.
@@ -86,6 +88,12 @@ func StartRuntime(ctx context.Context, o RuntimeOptions) (*Runtime, error) {
 	if o.MobDebug != "" {
 		args = append(args, "--mobdebug", o.MobDebug)
 	}
+	if modules, err := writeModuleMap(work, o.SrcDir); err != nil {
+		os.RemoveAll(work)
+		return nil, err
+	} else if modules != "" {
+		args = append(args, "--modules", modules)
+	}
 	cmd := newRuntimeCommand(ctx, lua, args...)
 	cmd.Dir = o.SrcDir
 	cmd.Stderr = o.Stderr
@@ -106,6 +114,29 @@ func StartRuntime(ctx context.Context, o RuntimeOptions) (*Runtime, error) {
 	r := &Runtime{cmd: cmd, stdin: stdin, messages: make(chan Message, 64), done: make(chan struct{}), workDir: work}
 	go r.read(stdout)
 	return r, nil
+}
+
+// writeModuleMap writes the squishy's Module declarations — one
+// "name<TAB>path" line each, path relative to srcDir — so the runtime resolves
+// a require the way the build bundles it, not only by its dotted name. Returns
+// "" when the project has no squishy.
+func writeModuleMap(work, srcDir string) (string, error) {
+	sq, err := squish.ParseFile(filepath.Join(srcDir, "squishy"))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", nil
+		}
+		return "", err
+	}
+	var b strings.Builder
+	for _, m := range sq.Modules {
+		fmt.Fprintf(&b, "%s\t%s\n", m.Name, m.Path)
+	}
+	path := filepath.Join(work, "modules.tsv")
+	if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {
+		return "", err
+	}
+	return path, nil
 }
 
 func (r *Runtime) read(stdout io.Reader) {
