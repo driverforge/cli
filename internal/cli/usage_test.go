@@ -40,7 +40,7 @@ func TestUsageErrorsAreFriendly(t *testing.T) {
 			}
 			var ue *clierr.UserError
 			errors.As(err, &ue)
-			if ue.Hint != "see "+c.wantURL {
+			if ue.Hint != urlLine("Documentation", c.wantURL) {
 				t.Errorf("hint = %q, want docs link %q", ue.Hint, c.wantURL)
 			}
 		})

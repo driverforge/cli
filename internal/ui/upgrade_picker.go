@@ -83,7 +83,7 @@ func (m *UpgradePickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			// No opener (headless/SSH) — show the link itself; linkify makes it
 			// clickable in terminals that support OSC-8.
-			m.flash = mutedStyle.Render("Release notes: ") + linkify(msg.url)
+			m.flash = mutedStyle.Render("Release notes:") + "\n" + linkify(msg.url)
 		} else {
 			m.flash = Muted("Opened release notes in your browser")
 		}
@@ -143,7 +143,7 @@ func (m *UpgradePickerModel) openNotes() tea.Cmd {
 	}
 	open, url := m.openURL, row.NotesURL
 	if open == nil {
-		m.flash = mutedStyle.Render("Release notes: ") + linkify(url)
+		m.flash = mutedStyle.Render("Release notes:") + "\n" + linkify(url)
 		return nil
 	}
 	return func() tea.Msg { return upgradeNotesOpenedMsg{url: url, err: open(url)} }

@@ -465,7 +465,8 @@ func runDeployPlain(ctx context.Context, out io.Writer, cl *agent.Client, dev or
 	case agent.StateConfirmedWithErrors:
 		fmt.Fprintf(out, "  ⚠ %s\n", firstNonEmpty(terminal.Error, "the driver's init handler reported an error"))
 		if terminal.ReportURL != "" {
-			fmt.Fprintf(out, "    → %s\n", terminal.ReportURL)
+			fmt.Fprintln(out, "    Deployment report:")
+			fmt.Fprintf(out, "    %s\n", terminal.ReportURL)
 		}
 		ui.PrintDeploySummaryPlain(out, version)
 	case agent.StateUnconfirmed:

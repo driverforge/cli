@@ -49,7 +49,7 @@ func handleAlreadyInit(out io.Writer, proj project.Project, cfg *driverforgeconf
 	// repair when that's the case, rather than at upgrade, which only swaps the
 	// bundle and would leave the real damage in place.
 	tip := "Run `driverforge upgrade` to update the embedded SDK."
-	if diag := initdriver.Diagnose(proj, len(cfg.BuildTargets) > 0); !diag.Healthy() {
+	if diag := initdriver.Diagnose(proj, len(cfg.BuildTargets) > 0, cfg.SDKDir); !diag.Healthy() {
 		rows = append(rows, [2]string{"status", fmt.Sprintf("incomplete — %d check(s) failing", len(diag.Failed()))})
 		tip = "Run `driverforge doctor` to restore what's missing."
 	}
@@ -101,7 +101,7 @@ func runSDKUpdate(ctx context.Context, out io.Writer, proj project.Project, cfg 
 	}
 
 	var changes []initdriver.Change
-	vendorCh, ok, err := fileChange(proj.Dir, initdriver.VendorBundlePath(proj.SrcDir), bundle)
+	vendorCh, ok, err := fileChange(proj.Dir, initdriver.VendorBundlePath(proj.SrcDir, cfg.SDKDir), bundle)
 	if err != nil {
 		return err
 	}

@@ -39,6 +39,7 @@ type Config struct {
 	Org          string   `json:"org"` // organization slug
 	Project      Project  `json:"project"`
 	SDKVersion   string   `json:"sdkVersion"`
+	SDKDir       string   `json:"sdkDir,omitempty"`
 	BuildTargets []string `json:"buildTargets"`
 	Logger       string   `json:"logger,omitempty"`
 	Entry        string   `json:"entry"`

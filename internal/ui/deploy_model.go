@@ -187,7 +187,8 @@ func (m *DeployModel) summary() string {
 			b.WriteString(warnStyle.Render("⚠ "+m.detail) + "\n")
 		}
 		if m.reportURL != "" {
-			b.WriteString(mutedStyle.Render("  → "+linkify(m.reportURL)) + "\n")
+			b.WriteString(mutedStyle.Render("  Deployment report:") + "\n")
+			b.WriteString(mutedStyle.Render("  "+linkify(m.reportURL)) + "\n")
 		}
 		// confirmed_with_errors: the driver is running, so still report the deploy.
 		if m.termState == agent.StateConfirmedWithErrors {

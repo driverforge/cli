@@ -110,11 +110,11 @@ func executeErr(err error) error {
 	case errors.Is(err, driverforgeapi.ErrProjectLimit):
 		return clierr.WithCode(clierr.WrapT(err, "Project limit reached",
 			"your plan doesn't include creating another project",
-			"upgrade your plan at "+orgLinkURL("plan", "settings/subscription")), codeProjectLimit)
+			urlLine("Manage your plan", orgLinkURL("plan", "settings/subscription"))), codeProjectLimit)
 	case errors.Is(err, driverforgeapi.ErrSubscriptionSuspended):
 		return clierr.WithCode(clierr.WrapT(err, "Subscription suspended",
 			"your organization's subscription is suspended",
-			"update billing at "+orgLinkURL("billing", "settings/billing")), codeSubscriptionSuspended)
+			urlLine("Update billing", orgLinkURL("billing", "settings/billing"))), codeSubscriptionSuspended)
 	}
 	return loginAwareErr(err)
 }

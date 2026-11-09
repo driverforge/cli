@@ -65,75 +65,83 @@ func (m *checkInModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if handled, cmd := m.settle.Observe(msg); handled {
 		return m, cmd
 	}
+	var cmd tea.Cmd
 	switch msg := msg.(type) {
 	case checkInEventMsg:
-		if m.settling { // batch already decided — drain without counting
-			return m, readSignal(m.events)
-		}
-		m.received++
-		m.gen++
-		g := m.gen
-		cmds := []tea.Cmd{
-			readSignal(m.events),
-			tea.Tick(quietPeriod, func(time.Time) tea.Msg { return quietMsg{gen: g} }),
-		}
-		if !m.started {
-			m.started = true
-			cmds = append(cmds, tea.Tick(countTickInterval, func(time.Time) tea.Msg { return countTickMsg{} }))
-		}
-		return m, tea.Batch(cmds...)
+		cmd = m.updateEvent()
 
 	case countTickMsg:
-		target := m.received
-		if !m.settling && target > revealCap {
-			target = revealCap
-		}
-		if m.shown < target {
-			m.shown++
-		}
-		// Reveal once the counter has arrived: it hit the cap, or the burst is
-		// done and the display has caught up to the total.
-		if (!m.settling && m.received >= revealCap && m.shown >= revealCap) ||
-			(m.settling && m.shown >= m.received) {
-			m.quit = true
-			return m, m.settle.Finish()
-		}
-		return m, tea.Tick(countTickInterval, func(time.Time) tea.Msg { return countTickMsg{} })
+		cmd = m.updateCount()
 
 	case quietMsg:
-		// Only the latest event's timer counts; a big batch caps out separately.
-		if msg.gen == m.gen && !m.settling && m.received < revealCap {
-			m.settling = true
-			if m.shown >= m.received { // already caught up — reveal now
-				m.quit = true
-				return m, m.settle.Finish()
-			}
-		}
-		return m, nil
+		cmd = m.updateQuiet(msg)
 
 	case checkInTimeoutMsg:
-		if !m.started {
-			m.quit = true
-			return m, m.settle.Finish()
-		}
-		return m, nil // already counting; the cap/quiet governs the exit
+		cmd = m.updateTimeout()
 
 	case checkInClosedMsg:
 		m.quit = true
-		return m, m.settle.Finish()
+		cmd = m.settle.Finish()
 
 	case spinner.TickMsg:
-		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
-		return m, cmd
 
 	case tea.KeyPressMsg:
 		if msg.String() == "ctrl+c" {
 			m.quit = true
-			return m, tea.Quit
+			cmd = tea.Quit
 		}
 	}
-	return m, nil
+	return m, cmd
+}
+
+func (m *checkInModel) updateEvent() tea.Cmd {
+	if m.settling {
+		return readSignal(m.events)
+	}
+	m.received++
+	m.gen++
+	gen := m.gen
+	cmds := []tea.Cmd{readSignal(m.events), tea.Tick(quietPeriod, func(time.Time) tea.Msg { return quietMsg{gen: gen} })}
+	if !m.started {
+		m.started = true
+		cmds = append(cmds, tea.Tick(countTickInterval, func(time.Time) tea.Msg { return countTickMsg{} }))
+	}
+	return tea.Batch(cmds...)
+}
+
+func (m *checkInModel) updateCount() tea.Cmd {
+	target := m.received
+	if !m.settling && target > revealCap {
+		target = revealCap
+	}
+	if m.shown < target {
+		m.shown++
+	}
+	if (!m.settling && m.received >= revealCap && m.shown >= revealCap) || (m.settling && m.shown >= m.received) {
+		m.quit = true
+		return m.settle.Finish()
+	}
+	return tea.Tick(countTickInterval, func(time.Time) tea.Msg { return countTickMsg{} })
+}
+
+func (m *checkInModel) updateQuiet(msg quietMsg) tea.Cmd {
+	if msg.gen == m.gen && !m.settling && m.received < revealCap {
+		m.settling = true
+		if m.shown >= m.received {
+			m.quit = true
+			return m.settle.Finish()
+		}
+	}
+	return nil
+}
+
+func (m *checkInModel) updateTimeout() tea.Cmd {
+	if !m.started {
+		m.quit = true
+		return m.settle.Finish()
+	}
+	return nil
 }
 
 func (m *checkInModel) View() tea.View {
@@ -153,7 +161,7 @@ func (m *checkInModel) View() tea.View {
 	b.WriteString(Success(m.countLabel()) + "\n")
 	b.WriteString(Celebrate(m.driver+" is live and reporting to Anvil!") + "\n\n")
 	b.WriteString(mutedStyle.Render("View your driver's event stream at:") + "\n")
-	b.WriteString(mutedStyle.Render("→  ") + linkify(m.url) + "\n")
+	b.WriteString(mutedStyle.Render("Events:") + "\n" + linkify(m.url) + "\n")
 	return tea.NewView(b.String())
 }
 
@@ -194,7 +202,8 @@ func RunCheckIn(ctx context.Context, w io.Writer, interactive bool, driver, url 
 		fmt.Fprintln(w, Celebrate(driver+" is live and reporting to Anvil!"))
 		fmt.Fprintln(w)
 		fmt.Fprintln(w, mutedStyle.Render("View your driver's event stream at:"))
-		fmt.Fprintln(w, mutedStyle.Render("→  ")+linkify(url))
+		fmt.Fprintln(w, mutedStyle.Render("Events:"))
+		fmt.Fprintln(w, linkify(url))
 		return
 	}
 	m := &checkInModel{driver: driver, url: url, events: events, spinner: newSpinner()}

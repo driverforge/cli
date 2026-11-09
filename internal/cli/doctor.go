@@ -93,7 +93,7 @@ func runDoctor(ctx context.Context, out io.Writer, yes bool) (doctorOut, error) 
 	}
 
 	buildTargets := len(cfg.BuildTargets) > 0
-	diag := initdriver.Diagnose(proj, buildTargets)
+	diag := initdriver.Diagnose(proj, buildTargets, cfg.SDKDir)
 	printDiagnosis(out, diag)
 	doc.Healthy = diag.Healthy()
 	for _, c := range diag.Checks {
@@ -186,6 +186,7 @@ func planRepair(ctx context.Context, out io.Writer, proj project.Project, cfg *d
 		BuildTargets: len(cfg.BuildTargets) > 0,
 		Targets:      cfg.BuildTargets,
 		LoggerGlobal: cfg.Logger,
+		SDKDir:       cfg.SDKDir,
 	})
 	if err != nil {
 		return nil, nil, err

@@ -43,7 +43,7 @@ func newBuildCmd() *cobra.Command {
 			if cmd.Flags().Changed("version") && strings.TrimSpace(versionFlag) == "" {
 				return clierr.WithCode(clierr.User("--version needs a value", "e.g. --version 2026070501"), codeUsage)
 			}
-			proj, err := requireProject(flagProjectDir)
+			proj, err := requireProjectManifest(flagProjectDir, c4zproj)
 			if err != nil {
 				return err
 			}
@@ -87,7 +87,7 @@ func newBuildCmd() *cobra.Command {
 				SrcDir:           proj.SrcDir,
 				DistDir:          distDir,
 				Version:          nextVersion,
-				ManifestPath:     c4zproj,
+				ManifestPath:     proj.ManifestPath,
 				AllowExecute:     allowExecute,
 				Unpack:           unpack,
 				Sourcemap:        sourcemap,
@@ -106,7 +106,7 @@ func newBuildCmd() *cobra.Command {
 	cmd.Flags().StringVarP(&configuration, "configuration", "c", "", "build configuration to apply (swaps in config.<configuration>.lua and suffixes the name; omit for a default build using config.lua)")
 	cmd.Flags().BoolVarP(&increment, "increment", "i", false, "bump <version> per the project's versioning scheme (date or integer, chosen at driverforge init)")
 	cmd.Flags().StringVar(&versionFlag, "version", "", "stamp an absolute <version> for this build (driverpackager --driver-version parity); persisted to driver.xml on success")
-	cmd.Flags().StringVar(&c4zproj, "c4zproj", "", "path to the .c4zproj manifest (default src/manifest.c4zproj)")
+	cmd.Flags().StringVar(&c4zproj, "c4zproj", "", "path to the .c4zproj manifest (auto-detected when omitted)")
 	cmd.Flags().StringVarP(&outputDir, "output-dir", "o", "", "directory for the built .c4z (default dist/)")
 	cmd.Flags().BoolVar(&allowExecute, "allow-execute", false, "development build: append C4:AllowExecute(true) to the driver script, enabling Director's Lua command window (never written to source)")
 	cmd.Flags().BoolVarP(&unpack, "unpack", "u", false, "also leave an unpacked copy in dist")

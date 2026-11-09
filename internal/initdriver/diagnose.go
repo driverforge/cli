@@ -58,8 +58,9 @@ func (d Diagnosis) Failed() []Check {
 // manifest) counts as FAILED rather than passing: reporting a project healthy
 // on the strength of a file we could not read is the mistake this whole path
 // exists to stop making.
-func Diagnose(proj project.Project, buildTargets bool) Diagnosis {
+func Diagnose(proj project.Project, buildTargets bool, dirs ...string) Diagnosis {
 	src := proj.SrcDir
+	sdkPath := sdkDir(dirs...)
 	var d Diagnosis
 
 	// 1. Entry Lua carries the require + Driverforge:Init.
@@ -78,24 +79,39 @@ func Diagnose(proj project.Project, buildTargets bool) Diagnosis {
 
 	// 2. The vendored bundle is present and non-empty. An empty file is not a
 	// driver that works.
-	st, serr := os.Stat(VendorBundlePath(src))
+	st, serr := os.Stat(VendorBundlePath(src, sdkPath))
 	d.Checks = append(d.Checks, Check{
 		Name: "embedded SDK",
-		What: "src/vendor/" + filepath.Base(VendorBundlePath(src)) + " is present",
+		What: filepath.ToSlash(filepath.Join(sdkPath, filepath.Base(VendorBundlePath(src, sdkPath)))) + " is present",
 		OK:   serr == nil && st.Size() > 0,
 	})
 
-	// 3. The manifest squishes Lua and ships the vendor dir.
-	squishOK, vendorOK := false, false
-	if manSrc, err := os.ReadFile(filepath.Join(src, "manifest.c4zproj")); err == nil {
-		if doc, perr := manifest.ParseBytes(manSrc, "manifest.c4zproj"); perr == nil {
-			squishOK = doc.SquishLua
-			vendorOK = hasVendorItem(doc)
+	// 3. Every selected manifest squishes Lua and ships the SDK directory.
+	manifestPaths := proj.ManifestPaths
+	if len(manifestPaths) == 0 {
+		manifestPaths = []string{proj.ManifestPath}
+	}
+	if manifestPaths[0] == "" {
+		manifestPaths[0] = filepath.Join(src, "manifest.c4zproj")
+	}
+	squishOK, vendorOK := true, true
+	for _, manifestPath := range manifestPaths {
+		manSrc, err := os.ReadFile(manifestPath)
+		if err != nil {
+			squishOK, vendorOK = false, false
+			break
 		}
+		doc, err := manifest.ParseBytes(manSrc, filepath.Base(manifestPath))
+		if err != nil {
+			squishOK, vendorOK = false, false
+			break
+		}
+		squishOK = squishOK && doc.SquishLua
+		vendorOK = vendorOK && hasSDKItem(doc, sdkPath)
 	}
 	d.Checks = append(d.Checks,
-		Check{Name: "squishLua", What: `manifest.c4zproj sets squishLua="true"`, OK: squishOK},
-		Check{Name: "vendor item", What: "manifest.c4zproj ships the vendor dir", OK: vendorOK},
+		Check{Name: "squishLua", What: `the manifest sets squishLua="true"`, OK: squishOK},
+		Check{Name: "SDK directory item", What: filepath.ToSlash(sdkPath) + " is shipped by the manifest", OK: vendorOK},
 	)
 
 	// 4. The squishy declares every module the patched entry requires. The
@@ -104,7 +120,7 @@ func Diagnose(proj project.Project, buildTargets bool) Diagnosis {
 	sdkDeclared, configDeclared := false, !buildTargets
 	if sqSrc, err := os.ReadFile(filepath.Join(src, "squishy")); err == nil {
 		sq := string(sqSrc)
-		sdkDeclared = strings.Contains(sq, `"vendor/`+filepath.Base(VendorBundlePath(src))+`"`)
+		sdkDeclared = strings.Contains(sq, `"`+sdkRelPath(sdkPath)+`"`)
 		if buildTargets {
 			configDeclared = strings.Contains(sq, `"config.lua"`)
 		}

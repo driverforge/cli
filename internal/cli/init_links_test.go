@@ -71,8 +71,8 @@ func TestExecuteErrCarriesOrgLinks(t *testing.T) {
 		err      error
 		wantHint string
 	}{
-		{"plan limit", driverforgeapi.ErrProjectLimit, "upgrade your plan at https://go.driverforge.test/plan?org=acme"},
-		{"suspended", driverforgeapi.ErrSubscriptionSuspended, "update billing at https://go.driverforge.test/billing?org=acme"},
+		{"plan limit", driverforgeapi.ErrProjectLimit, "Manage your plan:\nhttps://go.driverforge.test/plan?org=acme"},
+		{"suspended", driverforgeapi.ErrSubscriptionSuspended, "Update billing:\nhttps://go.driverforge.test/billing?org=acme"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			err := executeErr(c.err)

@@ -31,7 +31,14 @@ const commandSlugPrefix = "cli-"
 // argument count) as an expected clierr.UserError pointing at the relevant docs
 // page — so misuse renders as a friendly notice and is never reported to Sentry.
 func usageError(cmd *cobra.Command, err error) error {
-	return clierr.WithCode(clierr.WrapT(err, "Invalid usage", capitalise(err.Error()), "see "+docsURL(cmd)), codeUsage)
+	return clierr.WithCode(clierr.WrapT(err, "Invalid usage", capitalise(err.Error()), urlLine("Documentation", docsURL(cmd))), codeUsage)
+}
+
+// urlLine keeps a URL on a line of its own so terminal wrapping never splits
+// it. Terminal prompts don't render Markdown links, so an explicit label is
+// more portable than hiding the destination behind link text.
+func urlLine(label, url string) string {
+	return label + ":\n" + url
 }
 
 // docsURL is the docs short link for cmd: the per-command slug for a real

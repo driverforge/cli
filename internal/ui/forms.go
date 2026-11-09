@@ -52,7 +52,13 @@ func PickOneDesc(title, description string, choices []Choice, def string) (strin
 // returns the (trimmed) entered value. An empty answer falls back to def — use
 // it for a "suggested value you probably want" (e.g. a default name/branch).
 func PromptText(title, def string) (string, error) {
-	v, err := promptInput(title, "", def)
+	return PromptTextDesc(title, "", def)
+}
+
+// PromptTextDesc presents a described text input, pre-filled with def. An
+// empty answer falls back to def.
+func PromptTextDesc(title, description, def string) (string, error) {
+	v, err := promptInput(title, description, def)
 	if err != nil {
 		return "", err
 	}

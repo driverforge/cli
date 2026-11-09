@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"os"
+	"path/filepath"
 
 	"github.com/spf13/cobra"
 
@@ -31,6 +33,7 @@ type driverPlan struct {
 	buildTargets bool
 	targets      []string
 	logger       string
+	sdkDir       string
 	entryRel     string
 	scheme       string
 }
@@ -46,7 +49,7 @@ type driverPlan struct {
 // cfg is non-nil when the project is already initialised: init has reported
 // the setup and stops without error.
 func initPreflight(ctx context.Context, out io.Writer, projectDir string, o initOpts) (proj project.Project, cfg *driverforgeconfig.Config, err error) {
-	proj, err = requireProject(projectDir)
+	proj, err = requireProjectForInit(projectDir, o.c4zproj)
 	if err != nil {
 		return project.Project{}, nil, err
 	}
@@ -128,13 +131,40 @@ func gatherOrgAndProject(ctx context.Context, out io.Writer, cl *driverforgeapi.
 // build configurations, log forwarding, and the versioning scheme — prompting for
 // each. Nothing is created or written here.
 func gatherDriverShape(out io.Writer, proj project.Project, bundle []byte, version, entryRel string, o initOpts) (driverPlan, error) {
-	dp := driverPlan{bundle: bundle, version: version, entryRel: entryRel}
+	dp := driverPlan{bundle: bundle, version: version, entryRel: entryRel, sdkDir: o.sdkDir}
+	if dp.sdkDir == "" {
+		dp.sdkDir = initdriver.DefaultSDKDir
+	}
+	detectedSDKDir := ""
+	if !o.sdkDirSet {
+		if src, err := os.ReadFile(filepath.Join(proj.SrcDir, entryRel)); err == nil {
+			if dir, ok := initdriver.SDKDirFromEntry(src); ok {
+				dp.sdkDir, detectedSDKDir = dir, dir
+			}
+		}
+	}
+	if !o.sdkDirSet && ui.Interactive(flagNoTUI) {
+		description := "Driverforge places a copy of the SDK into your driver and updates every manifest and squishy file to include it."
+		if detectedSDKDir != "" {
+			description += "\n\nDetected existing SDK installation: " + displaySDKDir(detectedSDKDir)
+		}
+		selected, err := ui.PromptTextDesc("Where do you want to install the SDK?",
+			description+"\n\n"+urlLine("Documentation", sdkDocsURL), displaySDKDir(dp.sdkDir))
+		if err != nil {
+			return driverPlan{}, err
+		}
+		if !initdriver.ValidSDKDir(selected) {
+			return driverPlan{}, clierr.WithCode(clierr.User("SDK directory must be inside the driver source", "use a relative path such as vendor or lib/driverforge"), codeUsage)
+		}
+		dp.sdkDir = selected
+	}
+	fmt.Fprintln(out, ui.Success("SDK directory: "+dp.sdkDir))
 
 	// Build targets are opt-in; plain drivers carry no ENV system.
 	buildTargets, err := o.buildConfigs, error(nil)
 	if !o.buildConfigs && !o.noBuildConfigs {
 		buildTargets, err = ui.Confirm("Set up build configurations (default/release)?",
-			fmt.Sprintf("Adds config.lua (your default, used by `driverforge build`) and config.release.lua for release builds (`driverforge build --configuration release`) — so each build can point at different endpoints (e.g. a local/dev device vs production). Skip if every build uses the same config — see %s", buildConfigDocsURL), false)
+			"Adds config.lua (your default, used by `driverforge build`) and config.release.lua for release builds (`driverforge build --configuration release`) — so each build can point at different endpoints (e.g. a local/dev device vs production). Skip if every build uses the same config.\n\n"+urlLine("Documentation", buildConfigDocsURL), false)
 	}
 	if err != nil {
 		return driverPlan{}, err
@@ -171,6 +201,16 @@ func gatherDriverShape(out io.Writer, proj project.Project, bundle []byte, versi
 		return driverPlan{}, err
 	}
 	return dp, nil
+}
+
+func displaySDKDir(dir string) string {
+	if dir == "." {
+		return "./"
+	}
+	if filepath.IsAbs(dir) || len(dir) >= 2 && dir[:2] == "./" {
+		return dir
+	}
+	return "./" + filepath.ToSlash(dir)
 }
 
 // orgLinkURL builds a link to an org-scoped page in the web app.
@@ -220,6 +260,9 @@ const loggerDocsURL = "https://go.driverforge.com/logfwd"
 // contract — see docsBaseURL in usage.go.
 const buildConfigDocsURL = "https://go.driverforge.com/buildconfig"
 
+// sdkDocsURL documents how Driverforge embeds the SDK in a driver's source.
+const sdkDocsURL = "https://go.driverforge.com/sdk-install"
+
 // newInitCmd retrofits an existing driver project for Driverforge: it embeds the SDK,
 // wraps OnDriverInit, links or creates an Driverforge project, and (optionally)
 // scaffolds build targets — showing a diff for approval before writing anything.
@@ -245,6 +288,7 @@ func newInitCmd() *cobra.Command {
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			o.commitMsgSet = cmd.Flags().Changed("commit-message")
+			o.sdkDirSet = cmd.Flags().Changed("sdk-dir")
 			doc, err := runInit(cmd.Context(), textOut(cmd), flagProjectDir, o)
 			if err != nil {
 				return err
@@ -253,6 +297,8 @@ func newInitCmd() *cobra.Command {
 		},
 	}
 	f := cmd.Flags()
+	f.StringVar(&o.c4zproj, "c4zproj", "", "path to the .c4zproj manifest (required when the project has multiple manifests)")
+	f.StringVar(&o.sdkDir, "sdk-dir", initdriver.DefaultSDKDir, "source-relative directory to install the Driverforge SDK")
 	f.StringVar(&o.project, "project", "", "link an existing project: <org-slug>/<project-slug>, or a project slug")
 	f.StringVar(&o.createProject, "create-project", "", "create a project with this name for the driver to report to")
 	f.StringVar(&o.org, "org", "", "the organization to create the project in (default: the active one), or to qualify a --project slug")

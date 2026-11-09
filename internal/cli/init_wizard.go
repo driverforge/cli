@@ -193,7 +193,7 @@ func resolveOrg(ctx context.Context, cl *driverforgeapi.Client) (orgctx.Org, err
 		return orgctx.Org{}, &clierr.UserError{
 			Title:   "No organizations",
 			Message: "you don't belong to any organization yet",
-			Hint:    "create one at " + newOrgURL,
+			Hint:    urlLine("Create an organization", newOrgURL),
 		}
 	}
 	if !ui.Interactive(flagNoTUI) {
@@ -531,7 +531,7 @@ func resolveLoggerGlobal(srcDir, entryRel string) (string, error) {
 	if detected != "" {
 		on, err := ui.Confirm(
 			"Forward your driver's logs to Driverforge?",
-			fmt.Sprintf("It looks like your driver already has a logger (%s). Do you want to forward logs from it to Driverforge automatically, alongside events and errors? Your logger needs to implement the expected interface — see %s", detected, loggerDocsURL),
+			fmt.Sprintf("It looks like your driver already has a logger (%s). Do you want to forward logs from it to Driverforge automatically, alongside events and errors? Your logger needs to implement the expected interface.\n\n%s", detected, urlLine("Documentation", loggerDocsURL)),
 			true)
 		if err != nil {
 			return "", err
@@ -545,7 +545,7 @@ func resolveLoggerGlobal(srcDir, entryRel string) (string, error) {
 	// Nothing detected — ask whether they have a logger at all before naming it.
 	has, err := ui.Confirm(
 		"Does your driver have a logger Driverforge should forward?",
-		fmt.Sprintf("Driverforge can forward your driver's own log output to the dashboard, alongside events and errors. It won't create a logger for you — skip this if your driver doesn't log through a global. The logger must implement the expected interface — see %s", loggerDocsURL),
+		"Driverforge can forward your driver's own log output to the dashboard, alongside events and errors. It won't create a logger for you — skip this if your driver doesn't log through a global. The logger must implement the expected interface.\n\n"+urlLine("Documentation", loggerDocsURL),
 		false)
 	if err != nil {
 		return "", err

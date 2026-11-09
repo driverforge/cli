@@ -25,6 +25,9 @@ import (
 // question the wizard would ask; a question without its flag is asked in a
 // terminal and, without one, reported as missing before anything happens.
 type initOpts struct {
+	c4zproj       string // manifest to use when a project has multiple driver definitions
+	sdkDir        string
+	sdkDirSet     bool
 	project       string // link this existing project: <org-slug>/<project-slug> or a slug
 	createProject string // create a project with this name
 	org           string // the organization to create in, or to qualify a bare --project slug
@@ -69,6 +72,8 @@ func (o initOpts) validate() error {
 		return usage("--logger and --no-logger can't be used together", "pass one of them")
 	case o.logger != "" && !luaGlobalRe.MatchString(o.logger):
 		return usage(fmt.Sprintf("--logger %q isn't a valid Lua global", o.logger), "use a name like Log or my.logger — letters, digits, _ and . only")
+	case !initdriver.ValidSDKDir(o.sdkDir):
+		return usage("--sdk-dir must be a directory inside the driver source", "use a relative path such as vendor or lib/driverforge")
 	case o.branch != "" && o.noBranch:
 		return usage("--branch and --no-branch can't be used together", "pass one of them")
 	case o.commitMsgSet && o.branch == "":

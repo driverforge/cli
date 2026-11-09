@@ -3,6 +3,7 @@ package cli
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/driverforge/cli/internal/clierr"
@@ -20,6 +21,22 @@ func TestRequireProjectNonProjectDir(t *testing.T) {
 	}
 	if !clierr.IsUser(err) {
 		t.Errorf("expected a clierr.UserError, got %T: %v", err, err)
+	}
+}
+
+func TestRequireProjectForInitExplainsProjectRequirements(t *testing.T) {
+	_, err := requireProjectForInit(t.TempDir(), "")
+	if err == nil {
+		t.Fatal("expected an error outside a driver project")
+	}
+	if !clierr.IsUser(err) {
+		t.Fatalf("expected a clierr.UserError, got %T: %v", err, err)
+	}
+	if strings.Contains(err.Error(), "run `driverforge init` to create one") {
+		t.Errorf("init error should not tell the user to rerun init: %v", err)
+	}
+	if !strings.Contains(err.Error(), ".c4zproj") {
+		t.Errorf("init error should explain the required manifest: %v", err)
 	}
 }
 

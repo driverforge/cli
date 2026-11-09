@@ -31,7 +31,7 @@ func healthyProject(t *testing.T) project.Project {
   </Items>
 </Driver>
 `)
-	write("squishy", "Main \"driver.lua\"\n\n"+squishySDKModule+"\n")
+	write("squishy", "Main \"driver.lua\"\n\n"+squishySDKModule()+"\n")
 	return project.Project{Dir: dir, SrcDir: src}
 }
 
@@ -115,7 +115,7 @@ func TestDiagnoseManifestAndSquishy(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := failedNames(Diagnose(proj, false))
-	for _, want := range []string{"squishLua", "vendor item", "squishy SDK module"} {
+	for _, want := range []string{"squishLua", "SDK directory item", "squishy SDK module"} {
 		if !got[want] {
 			t.Errorf("%q not flagged", want)
 		}
@@ -143,7 +143,7 @@ func TestDiagnoseBuildTargetsRequireConfigModule(t *testing.T) {
 		t.Error("build targets should require the config module declaration")
 	}
 	if err := os.WriteFile(filepath.Join(proj.SrcDir, "squishy"),
-		[]byte("Main \"driver.lua\"\n"+squishySDKModule+"\n"+squishyConfigModule+"\n"), 0o644); err != nil {
+		[]byte("Main \"driver.lua\"\n"+squishySDKModule()+"\n"+squishyConfigModule+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if !Diagnose(proj, true).Healthy() {

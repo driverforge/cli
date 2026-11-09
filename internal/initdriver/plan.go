@@ -69,41 +69,51 @@ func Plan(proj project.Project, d Decision) (*Result, error) {
 	res.addModify(proj, entryAbs, entrySrc, patched)
 
 	// 2. Embed the SDK bundle.
-	vendorAbs := VendorBundlePath(src)
+	vendorAbs := VendorBundlePath(src, d.SDKDir)
 	if err := res.addFile(proj, vendorAbs, d.SDKBundle, true); err != nil {
 		return nil, err
 	}
 
 	// 3. Manifest: vendor item + squishLua.
-	manifestAbs := filepath.Join(src, "manifest.c4zproj")
-	if manSrc, err := os.ReadFile(manifestAbs); err == nil {
-		newMan, err := PatchManifest(manSrc)
+	manifestPaths := proj.ManifestPaths
+	if len(manifestPaths) == 0 {
+		manifestPaths = []string{proj.ManifestPath}
+	}
+	if manifestPaths[0] == "" {
+		manifestPaths[0] = filepath.Join(src, "manifest.c4zproj")
+	}
+	for _, manifestAbs := range manifestPaths {
+		manSrc, err := os.ReadFile(manifestAbs)
 		if err != nil {
-			return nil, err
+			return nil, &clierr.UserError{
+				Title:   "Not an Driverforge driver project",
+				Message: fmt.Sprintf("%s is missing", manifestAbs),
+				Hint:    "run driverforge init from a driver project, or pass --c4zproj <path>",
+				Err:     err,
+			}
+		}
+		newMan, err := PatchManifest(manSrc, d.SDKDir)
+		if err != nil {
+			return nil, clierr.WrapT(err, "Invalid driver manifest",
+				fmt.Sprintf("couldn't parse %s", filepath.Base(manifestAbs)),
+				"fix the manifest XML, then run `driverforge init` again")
 		}
 		res.addModify(proj, manifestAbs, manSrc, newMan)
+	}
 
-		// 3b. Squishy: the manifest patch forces squishLua, so the squishy
-		// must exist and declare every module the patched entry requires —
-		// the squisher's preload carries only declared modules, and a missing
-		// one is a driver-load LUA_ERROR on the controller.
-		squishyAbs := filepath.Join(src, "squishy")
-		if sqSrc, sqErr := os.ReadFile(squishyAbs); sqErr == nil {
-			res.addModify(proj, squishyAbs, sqSrc, PatchSquishy(sqSrc, d.BuildTargets))
-		} else if errors.Is(sqErr, fs.ErrNotExist) {
-			if err := res.addFile(proj, squishyAbs, NewSquishy(entryRel, d.BuildTargets), false); err != nil {
-				return nil, err
-			}
-		} else {
-			return nil, fmt.Errorf("reading squishy: %w", sqErr)
+	// 3b. Squishy: the manifest patch forces squishLua, so the squishy
+	// must exist and declare every module the patched entry requires —
+	// the squisher's preload carries only declared modules, and a missing
+	// one is a driver-load LUA_ERROR on the controller.
+	squishyAbs := filepath.Join(src, "squishy")
+	if sqSrc, sqErr := os.ReadFile(squishyAbs); sqErr == nil {
+		res.addModify(proj, squishyAbs, sqSrc, PatchSquishy(sqSrc, d.BuildTargets, d.SDKDir))
+	} else if errors.Is(sqErr, fs.ErrNotExist) {
+		if err := res.addFile(proj, squishyAbs, NewSquishy(entryRel, d.BuildTargets, d.SDKDir), false); err != nil {
+			return nil, err
 		}
 	} else {
-		return nil, &clierr.UserError{
-			Title:   "Not an Driverforge driver project",
-			Message: "src/manifest.c4zproj is missing",
-			Hint:    "run driverforge init from a driver project",
-			Err:     err,
-		}
+		return nil, fmt.Errorf("reading squishy: %w", sqErr)
 	}
 
 	// 4. Build configurations (opt-in): config.lua is the committed default (the

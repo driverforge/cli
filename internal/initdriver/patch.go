@@ -17,6 +17,10 @@ import (
 	"github.com/driverforge/cli/pkg/c4z/manifest"
 )
 
+// DefaultSDKDir is the source-relative directory used when init is not given
+// an SDK destination.
+const DefaultSDKDir = "./vendor"
+
 // Decision captures everything the transforms need, resolved by the command
 // layer from the user's choices.
 type Decision struct {
@@ -26,6 +30,7 @@ type Decision struct {
 	BuildTargets bool     // true => scaffold per-build config (config.lua + config.<target>.lua + require('config'))
 	Targets      []string // build-target names when BuildTargets (e.g. debug, release)
 	LoggerGlobal string   // existing logger global to forward (e.g. "Log"); "" => none
+	SDKDir       string   // source-relative directory for the embedded SDK; "" => vendor
 }
 
 // tokenArg renders the first argument to Driverforge:Init: the project token, which
@@ -49,13 +54,40 @@ func (d Decision) loggerOpt() string {
 // tree. The planner writes it, `driverforge upgrade` checks it is still there,
 // and the review UI hides it from the diff — so it gets one definition rather
 // than three that can drift apart.
-func VendorBundlePath(srcDir string) string {
-	return filepath.Join(srcDir, "vendor", sdkrelease.BundleName)
+func VendorBundlePath(srcDir string, dirs ...string) string {
+	return filepath.Join(srcDir, sdkDir(dirs...), sdkrelease.BundleName)
 }
 
-// sdkRequire is the require the patched entry uses to pull in the vendored SDK.
-// The module name must match the squishy Module declaration below verbatim.
-const sdkRequire = "require('vendor.driverforge-sdk')"
+func sdkDir(dirs ...string) string {
+	if len(dirs) == 0 || dirs[0] == "" {
+		return filepath.Clean(DefaultSDKDir)
+	}
+	return filepath.Clean(dirs[0])
+}
+
+// ValidSDKDir reports whether dir is a non-empty path inside the driver's
+// source directory.
+func ValidSDKDir(dir string) bool {
+	if dir == "" {
+		return true
+	}
+	dir = filepath.Clean(dir)
+	return filepath.IsLocal(dir)
+}
+
+func sdkRelPath(dirs ...string) string {
+	return filepath.ToSlash(filepath.Join(sdkDir(dirs...), sdkrelease.BundleName))
+}
+
+func sdkModule(dirs ...string) string {
+	dir := filepath.ToSlash(sdkDir(dirs...))
+	if dir == "." {
+		return "driverforge-sdk"
+	}
+	return strings.ReplaceAll(dir, "/", ".") + ".driverforge-sdk"
+}
+
+func sdkRequire(d Decision) string { return "require('" + sdkModule(d.SDKDir) + "')" }
 
 // initCall renders the SDK entry point. The driver's filename is not passed:
 // the SDK reads it from C4:GetDriverFileName() itself, so it always names the
@@ -71,8 +103,7 @@ func (d Decision) initCall() string {
 // the driver is already wired and skip patching.
 func alreadyPatched(src []byte) bool {
 	s := string(stripComments(src))
-	return strings.Contains(s, "vendor.driverforge-sdk") ||
-		strings.Contains(s, "vendor/driverforge-sdk") ||
+	return strings.Contains(s, "driverforge-sdk") ||
 		strings.Contains(s, "Driverforge:Init")
 }
 
@@ -80,12 +111,48 @@ var onDriverInitRe = regexp.MustCompile(`function[ \t]+OnDriverInit[ \t]*\(([^)]
 
 var configRequireRe = regexp.MustCompile(`require\(\s*['"]config['"]\s*\)`)
 
+var sdkRequireRe = regexp.MustCompile(`require\s*\(\s*['"]([A-Za-z0-9_.-]+)['"]\s*\)`)
+
+var driverforgeInitTokenRe = regexp.MustCompile(`Driverforge:Init\s*\(\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')`)
+
+// SDKDirFromEntry returns the source-relative SDK directory declared by a Lua
+// require call, when one is present. A root-level SDK returns ".".
+func SDKDirFromEntry(src []byte) (string, bool) {
+	for _, match := range sdkRequireRe.FindAllSubmatch(stripComments(src), -1) {
+		module := string(match[1])
+		if module == "driverforge-sdk" {
+			return ".", true
+		}
+		if !strings.HasSuffix(module, ".driverforge-sdk") {
+			continue
+		}
+		dir := strings.TrimSuffix(module, ".driverforge-sdk")
+		return filepath.FromSlash(strings.ReplaceAll(dir, ".", "/")), true
+	}
+	return "", false
+}
+
+// patchInitToken replaces the literal project token in an existing SDK init
+// call. The offsets come from comment-stripped source, which preserves byte
+// positions, so commented-out calls are never changed.
+func patchInitToken(src []byte, d Decision) []byte {
+	loc := driverforgeInitTokenRe.FindSubmatchIndex(stripComments(src))
+	if loc == nil || string(src[loc[2]:loc[3]]) == d.tokenArg() {
+		return src
+	}
+	out := make([]byte, 0, len(src)+len(d.tokenArg())-(loc[3]-loc[2]))
+	out = append(out, src[:loc[2]]...)
+	out = append(out, d.tokenArg()...)
+	out = append(out, src[loc[3]:]...)
+	return out
+}
+
 // PatchEntry rewrites the driver's entry Lua to wire in Driverforge. It returns the new
 // bytes (equal to the input when already patched) and an optional warning when it
 // could not wrap cleanly (no OnDriverInit, or an unbalanced body).
 func PatchEntry(src []byte, d Decision) (out []byte, warning string) {
 	if alreadyPatched(src) {
-		return src, ""
+		return patchInitToken(src, d), ""
 	}
 
 	loc := onDriverInitRe.FindSubmatchIndex(src)
@@ -104,7 +171,7 @@ func PatchEntry(src []byte, d Decision) (out []byte, warning string) {
 		// leave a TODO rather than risk mangling the body.
 		var b strings.Builder
 		b.Write(src[:bodyStart])
-		b.WriteString("\n    " + sdkRequire + "\n")
+		b.WriteString("\n    " + sdkRequire(d) + "\n")
 		b.WriteString("    " + d.initCall() + "\n")
 		b.WriteString("    -- TODO(driverforge): wrap the rest of this function's body in\n")
 		b.WriteString("    -- Anvil:OnDriverInit(function(strDIR) ... end, strDIR) to defer it.\n")
@@ -119,7 +186,7 @@ func PatchEntry(src []byte, d Decision) (out []byte, warning string) {
 	var b strings.Builder
 	b.Write(src[:headerStart])
 	b.WriteString("function OnDriverInit(" + params + ")\n")
-	b.WriteString("    " + sdkRequire + "\n")
+	b.WriteString("    " + sdkRequire(d) + "\n")
 	b.WriteString("    " + d.initCall() + "\n\n")
 	b.WriteString("    Anvil:OnDriverInit(function(" + innerParam + ")\n")
 	b.WriteString(reindent(body, "    "))
@@ -186,7 +253,7 @@ func newOnDriverInit(d Decision) []byte {
 	// is nil normally but a hard error under a strict-globals _G __index — a
 	// common C4 pattern. Mirrors wrapDirArgs' no-parameter case.
 	return []byte("\n\nfunction OnDriverInit(...)\n" +
-		"    " + sdkRequire + "\n" +
+		"    " + sdkRequire(d) + "\n" +
 		"    " + d.initCall() + "\n\n" +
 		"    Anvil:OnDriverInit(function(strDIR)\n" +
 		"    end)\nend\n")
@@ -210,27 +277,28 @@ var (
 	closeItemsRe    = regexp.MustCompile(`(?m)^([ \t]*)</Items>`)
 )
 
-const vendorItem = `<Item type="dir" c4zDir="vendor" name="vendor" recurse="true" exclude="false"/>`
-
 // PatchManifest ensures the manifest squishes Lua and ships the vendor dir. It
 // returns the new bytes (equal to input when already satisfied).
 // Squishy Module lines for the files init's patches require. The module NAMES
 // must match the require strings PatchEntry/ensureConfigRequire write verbatim
 // — the squisher registers each as a package.preload key, and a require that
 // isn't declared here is a driver-load LUA_ERROR on the controller.
-const (
-	squishySDKModule    = `Module "vendor.driverforge-sdk" "vendor/driverforge-sdk.lua"`
-	squishyConfigModule = `Module "config" "config.lua"`
-)
+const squishyConfigModule = `Module "config" "config.lua"`
+
+const vendorItem = `<Item type="dir" c4zDir="vendor" name="vendor" recurse="true" exclude="false"/>`
+
+func squishySDKModule(dirs ...string) string {
+	return `Module "` + sdkModule(dirs...) + `" "` + sdkRelPath(dirs...) + `"`
+}
 
 // PatchSquishy ensures the squishy declares the modules init introduces: the
 // embedded SDK, and — with build targets — the config module. Missing Module
 // lines are inserted before the Output directive (or appended); existing
 // declarations (any module name pointing at the file) are left alone.
-func PatchSquishy(src []byte, buildTargets bool) []byte {
+func PatchSquishy(src []byte, buildTargets bool, dirs ...string) []byte {
 	var add []string
-	if !bytes.Contains(src, []byte(`"vendor/driverforge-sdk.lua"`)) {
-		add = append(add, squishySDKModule)
+	if !bytes.Contains(src, []byte(`"`+sdkRelPath(dirs...)+`"`)) {
+		add = append(add, squishySDKModule(dirs...))
 	}
 	if buildTargets && !bytes.Contains(src, []byte(`"config.lua"`)) {
 		add = append(add, squishyConfigModule)
@@ -255,10 +323,10 @@ func PatchSquishy(src []byte, buildTargets bool) []byte {
 
 // NewSquishy renders a fresh squishy for a driver that has none — init forces
 // squishLua on the manifest, so the build needs one to exist.
-func NewSquishy(entryRel string, buildTargets bool) []byte {
+func NewSquishy(entryRel string, buildTargets bool, dirs ...string) []byte {
 	var b strings.Builder
 	b.WriteString(`Main "` + filepath.ToSlash(entryRel) + `"` + "\n\n")
-	b.WriteString(squishySDKModule + "\n")
+	b.WriteString(squishySDKModule(dirs...) + "\n")
 	if buildTargets {
 		b.WriteString(squishyConfigModule + "\n")
 	}
@@ -273,7 +341,7 @@ func NewSquishy(entryRel string, buildTargets bool) []byte {
 //
 // It returns the patched source rather than a parsed document: the file is edited
 // textually so the author's formatting and comments survive.
-func PatchManifest(src []byte) ([]byte, error) {
+func PatchManifest(src []byte, dirs ...string) ([]byte, error) {
 	d, err := manifest.ParseBytes(src, "manifest.c4zproj")
 	if err != nil {
 		return nil, fmt.Errorf("parsing manifest: %w", err)
@@ -283,20 +351,34 @@ func PatchManifest(src []byte) ([]byte, error) {
 	if !d.SquishLua {
 		out = ensureSquishLua(out)
 	}
-	if !hasVendorItem(d) {
-		out = insertVendorItem(out)
+	if !hasSDKItem(d, sdkDir(dirs...)) {
+		out = insertSDKItem(out, sdkDir(dirs...))
 	}
 	return out, nil
 }
 
-func hasVendorItem(d *manifest.Driver) bool {
+func hasDirItem(d *manifest.Driver, dir string) bool {
 	for _, it := range d.Items {
-		if it.Name == "vendor" {
+		if filepath.ToSlash(it.Name) == filepath.ToSlash(dir) {
 			return true
 		}
 	}
 	return false
 }
+
+func hasSDKItem(d *manifest.Driver, dir string) bool {
+	if dir == "." {
+		for _, item := range d.Items {
+			if item.Type == manifest.ItemFile && item.Name == sdkrelease.BundleName {
+				return true
+			}
+		}
+		return false
+	}
+	return hasDirItem(d, dir)
+}
+
+func hasVendorItem(d *manifest.Driver) bool { return hasDirItem(d, "vendor") }
 
 // ensureSquishLua sets squishLua="true" on the <Driver> tag, replacing an
 // existing (false) value or adding the attribute when absent.
@@ -322,16 +404,23 @@ func ensureSquishLua(src []byte) []byte {
 	return bytes.Replace(src, tag, newTag, 1)
 }
 
-// insertVendorItem adds the vendor <Item> just before </Items>, matching its
+// insertSDKItem adds the SDK <Item> just before </Items>, matching its
 // indentation (plus one nesting level).
-func insertVendorItem(src []byte) []byte {
+func insertSDKItem(src []byte, dir string) []byte {
 	loc := closeItemsRe.FindSubmatchIndex(src)
 	if loc == nil {
 		return src
 	}
 	indent := string(src[loc[2]:loc[3]])
 	itemIndent := indent + "  "
-	insertion := itemIndent + vendorItem + "\n"
+	var item string
+	if dir == "." {
+		item = `<Item type="file" name="` + sdkrelease.BundleName + `"/>`
+	} else {
+		dir = filepath.ToSlash(dir)
+		item = `<Item type="dir" c4zDir="` + dir + `" name="` + dir + `" recurse="true" exclude="false"/>`
+	}
+	insertion := itemIndent + item + "\n"
 	out := make([]byte, 0, len(src)+len(insertion))
 	out = append(out, src[:loc[0]]...)
 	out = append(out, insertion...)

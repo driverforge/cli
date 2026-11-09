@@ -9,7 +9,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/driverforge/cli/internal/driverforgeapi"
 	"github.com/driverforge/cli/internal/driverforgeconfig"
@@ -33,6 +32,7 @@ func buildInitChanges(proj project.Project, dp driverPlan, org orgctx.Org, linke
 		BuildTargets: dp.buildTargets,
 		Targets:      dp.targets,
 		LoggerGlobal: dp.logger,
+		SDKDir:       dp.sdkDir,
 	})
 	if err != nil {
 		return nil, err
@@ -41,6 +41,7 @@ func buildInitChanges(proj project.Project, dp driverPlan, org orgctx.Org, linke
 		Org:          org.Slug,
 		Project:      driverforgeconfig.Project{Slug: linked.Slug, Name: linked.Name},
 		SDKVersion:   dp.version,
+		SDKDir:       dp.sdkDir,
 		BuildTargets: dp.targets,
 		Logger:       dp.logger,
 		Entry:        dp.entryRel,
@@ -74,7 +75,7 @@ func reviewableChanges(changes []initdriver.Change) (reviewable []initdriver.Cha
 }
 
 func isSDKBundle(rel string) bool {
-	return strings.HasSuffix(filepath.ToSlash(rel), "vendor/"+sdkrelease.BundleName)
+	return filepath.Base(filepath.ToSlash(rel)) == sdkrelease.BundleName
 }
 
 // reviewCodeChanges presents the given file changes in a tabbed, scrollable

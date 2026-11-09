@@ -67,6 +67,72 @@ func TestPlanInlineMode(t *testing.T) {
 	}
 }
 
+func TestPlanPatchesEveryCompatibilityManifest(t *testing.T) {
+	proj := fixtureProject(t)
+	if err := os.WriteFile(filepath.Join(proj.SrcDir, "squishy"), []byte("Main \"driver.lua\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var manifests []string
+	for _, name := range []string{"manifest.c4zproj", "compat.c4zproj", "current.c4zproj", "legacy.c4zproj"} {
+		path := filepath.Join(proj.SrcDir, name)
+		if name != "manifest.c4zproj" {
+			if err := os.WriteFile(path, []byte(`<Driver type="c4z" name="legacy">
+  <Items>
+  </Items>
+</Driver>
+`), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		manifests = append(manifests, path)
+	}
+	proj.ManifestPaths = manifests
+
+	res, err := Plan(proj, Decision{SDKBundle: []byte("-- sdk\n"), ProjectToken: "drv_xyz"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rel := range []string{"src/manifest.c4zproj", "src/compat.c4zproj", "src/current.c4zproj", "src/legacy.c4zproj"} {
+		change := changeByRel(res, rel)
+		if change == nil || !strings.Contains(string(change.New), `squishLua="true"`) || !strings.Contains(string(change.New), `name="vendor"`) {
+			t.Errorf("expected SDK manifest changes for %s, got %v", rel, change)
+		}
+	}
+}
+
+func TestPlanUsesSDKInstallationLocation(t *testing.T) {
+	tests := []struct {
+		name, sdkDir, sdkPath, module, manifestItem, squishyPath string
+	}{
+		{"nested directory", "driverforge/sdk", "src/driverforge/sdk/driverforge-sdk.lua", `require('driverforge.sdk.driverforge-sdk')`, `name="driverforge/sdk"`, `"driverforge/sdk/driverforge-sdk.lua"`},
+		{"source root", "./", "src/driverforge-sdk.lua", `require('driverforge-sdk')`, `<Item type="file" name="driverforge-sdk.lua"/>`, `"driverforge-sdk.lua"`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			proj := fixtureProject(t)
+			res, err := Plan(proj, Decision{SDKBundle: []byte("-- sdk\n"), ProjectToken: "drv_xyz", SDKDir: test.sdkDir})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if changeByRel(res, test.sdkPath) == nil {
+				t.Errorf("expected SDK bundle at %s", test.sdkPath)
+			}
+			entry := changeByRel(res, "src/driver.lua")
+			if entry == nil || !strings.Contains(string(entry.New), test.module) {
+				t.Errorf("entry should require configured SDK module: %v", entry)
+			}
+			manifest := changeByRel(res, "src/manifest.c4zproj")
+			if manifest == nil || !strings.Contains(string(manifest.New), test.manifestItem) {
+				t.Errorf("manifest should include configured SDK path: %v", manifest)
+			}
+			squishy := changeByRel(res, "src/squishy")
+			if squishy == nil || !strings.Contains(string(squishy.New), test.squishyPath) {
+				t.Errorf("squishy should include configured SDK path: %v", squishy)
+			}
+		})
+	}
+}
+
 func TestPlanBuildTargetsMode(t *testing.T) {
 	proj := fixtureProject(t)
 	d := Decision{

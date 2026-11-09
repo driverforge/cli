@@ -385,7 +385,7 @@ func sdkRow(ctx context.Context, out io.Writer) compRow {
 	// the change itself (only whether to branch for it). That is fine for
 	// swapping one vendored file and wrong for patching source, so this row
 	// routes to `doctor`, which reviews before it writes.
-	if diag := initdriver.Diagnose(proj, len(cfg.BuildTargets) > 0); !diag.Healthy() {
+	if diag := initdriver.Diagnose(proj, len(cfg.BuildTargets) > 0, cfg.SDKDir); !diag.Healthy() {
 		r.current = "incomplete"
 		if len(diag.Failed()) == 1 && diag.Failed()[0].Name == "embedded SDK" {
 			r.current = "missing"

@@ -96,6 +96,22 @@ func TestPatchEntryIdempotent(t *testing.T) {
 	}
 }
 
+func TestPatchEntryUpdatesExistingProjectToken(t *testing.T) {
+	src := []byte(`require('driverforge.driverforge-sdk')
+function OnDriverInit()
+    Driverforge:Init("drv_project_one", { logger = Log })
+end
+`)
+	out, warn := PatchEntry(src, Decision{ProjectToken: "drv_project_two"})
+	if warn != "" {
+		t.Fatalf("unexpected warning: %s", warn)
+	}
+	got := string(out)
+	if strings.Contains(got, "drv_project_one") || !strings.Contains(got, `Driverforge:Init("drv_project_two", { logger = Log })`) {
+		t.Errorf("existing init call was not updated correctly:\n%s", got)
+	}
+}
+
 func TestPatchEntryNoHandlerAddsOne(t *testing.T) {
 	src := []byte("-- a driver with no init\nlocal x = 1\n")
 	out, warn := PatchEntry(src, Decision{ProjectToken: "k"})
@@ -275,6 +291,27 @@ func TestPatchEntryCommentedInitIsNotAlreadyPatched(t *testing.T) {
 	out, _ := PatchEntry(src, Decision{ProjectToken: "drv_k"})
 	if !bytes.Contains(out, []byte("require('vendor.driverforge-sdk')")) {
 		t.Errorf("a commented-out Driverforge:Init must not suppress patching:\n%s", out)
+	}
+}
+
+func TestSDKDirFromEntry(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		src  string
+		want string
+		ok   bool
+	}{
+		{"nested", `require('driverforge.driverforge-sdk')`, "driverforge", true},
+		{"root", `require('driverforge-sdk')`, ".", true},
+		{"comment", `-- require('driverforge.driverforge-sdk')`, "", false},
+		{"unrelated", `require('config')`, "", false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, ok := SDKDirFromEntry([]byte(test.src))
+			if got != test.want || ok != test.ok {
+				t.Errorf("SDKDirFromEntry() = (%q, %v), want (%q, %v)", got, ok, test.want, test.ok)
+			}
+		})
 	}
 }
 

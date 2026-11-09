@@ -48,7 +48,7 @@ func deployFailErr(terminal agent.DeployEvent) error {
 	msg := firstNonEmpty(terminal.Error, firstNonEmpty(terminal.Step, "the controller rejected the driver"))
 	hint := ""
 	if terminal.ReportURL != "" {
-		hint = "see " + terminal.ReportURL
+		hint = urlLine("Deployment report", terminal.ReportURL)
 	}
 	return clierr.WithCode(clierr.UserT("Deploy failed", msg, hint), codeDeployFailed)
 }
@@ -64,7 +64,7 @@ func friendlyDeployErr(dev orgctx.Device, err error) error {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return clierr.WithCode(clierr.WrapT(err, "Deploy timed out",
 			fmt.Sprintf("Deploy to %s timed out — the controller didn't finish in time.", dev.Name),
-			"Check the controller and try again — see "+agentDocsURL), codeDeployTimedOut)
+			"Check the controller and try again.\n\n"+urlLine("Documentation", agentDocsURL)), codeDeployTimedOut)
 	}
 	// The agent answered with a reason (a structured error). Whatever it is, the
 	// CLI did its job — surface the agent's message, don't crash/report.
@@ -111,25 +111,25 @@ func agentUnreachableErr(dev orgctx.Device, cause error) error {
 	case isConnRefused(cause):
 		return clierr.WithCode(clierr.WrapT(cause, "Agent not accepting connections",
 			fmt.Sprintf("%s answered, but nothing is listening on the deploy port.", where),
-			"In Composer, open the Anvil Agent driver and run its \"Restart Deploy Server\" action — see "+agentDocsURL), codeAgentUnreachable)
+			"In Composer, open the Anvil Agent driver and run its \"Restart Deploy Server\" action.\n\n"+urlLine("Documentation", agentDocsURL)), codeAgentUnreachable)
 
 	case isTimeout(cause):
 		return clierr.WithCode(clierr.WrapT(cause, "Controller not responding",
 			fmt.Sprintf("No response from %s.", where),
 			"Check the controller is powered on and reachable from this machine — a VLAN or firewall "+
 				"between you and it will block the deploy port. If its address has changed, re-run "+
-				"`driverforge device select` — see "+agentDocsURL), codeAgentUnreachable)
+				"`driverforge device select`.\n\n"+urlLine("Documentation", agentDocsURL)), codeAgentUnreachable)
 
 	case isDNSError(cause):
 		return clierr.WithCode(clierr.WrapT(cause, "Controller address won't resolve",
 			fmt.Sprintf("Couldn't resolve an address for %s.", where),
 			"A Control4 hostname isn't a DNS name, so the controller's IP is what deploy uses. "+
-				"Re-run `driverforge device select` to refresh it — see "+agentDocsURL), codeAgentUnreachable)
+				"Re-run `driverforge device select` to refresh it.\n\n"+urlLine("Documentation", agentDocsURL)), codeAgentUnreachable)
 	}
 
 	return clierr.WithCode(clierr.WrapT(cause, "Agent unreachable",
 		fmt.Sprintf("Couldn't reach the Anvil Agent on %s.", where),
-		"Check the Anvil Agent is installed and running on the controller — see "+agentDocsURL), codeAgentUnreachable)
+		"Check the Anvil Agent is installed and running on the controller.\n\n"+urlLine("Documentation", agentDocsURL)), codeAgentUnreachable)
 }
 
 // isConnRefused reports a TCP refusal: the host is up and answered, but nothing
@@ -165,5 +165,5 @@ func agentMissingCapabilityErr(dev orgctx.Device, capability, version string) er
 	if version != "" {
 		msg = fmt.Sprintf("The Anvil Agent on %s (%s) doesn't support %s.", dev.Name, version, capability)
 	}
-	return clierr.WithCode(clierr.UserT("Agent out of date", msg, "Update the Anvil Agent on the controller — see "+agentDocsURL), codeAgentOutOfDate)
+	return clierr.WithCode(clierr.UserT("Agent out of date", msg, "Update the Anvil Agent on the controller.\n\n"+urlLine("Documentation", agentDocsURL)), codeAgentOutOfDate)
 }
