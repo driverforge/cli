@@ -3,6 +3,8 @@ package remote4
 import (
 	"archive/zip"
 	"bytes"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
@@ -29,6 +31,20 @@ type StubConfig struct {
 	DriverToken     string // drv_ token; empty disables the stub's SDK
 	AgentDriverName string // SDK discovery override, optional
 	StubVersion     string
+	// RelayKey is the session's secret for the agent's LAN relay (see
+	// NewRelayKey); empty leaves the stub on the broker only.
+	RelayKey string
+}
+
+// NewRelayKey mints a session's relay key: the secret the stub and the agent
+// both check on every relayed message, so no other driver on the controller
+// can speak for the session.
+func NewRelayKey() (string, error) {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("remote4: minting the relay key: %w", err)
+	}
+	return hex.EncodeToString(b), nil
 }
 
 // Bundle assembles the stub driver's script: the session config, the codec
@@ -66,6 +82,9 @@ func luaConfig(cfg StubConfig) string {
 	fmt.Fprintf(&b, "  stubVersion = %s,\n", luaString(cfg.StubVersion))
 	if cfg.DriverToken != "" {
 		fmt.Fprintf(&b, "  driverToken = %s,\n", luaString(cfg.DriverToken))
+	}
+	if cfg.RelayKey != "" {
+		fmt.Fprintf(&b, "  relayKey = %s,\n", luaString(cfg.RelayKey))
 	}
 	if cfg.AgentDriverName != "" {
 		fmt.Fprintf(&b, "  agentDriverName = %s,\n", luaString(cfg.AgentDriverName))

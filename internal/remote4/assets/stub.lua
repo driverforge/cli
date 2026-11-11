@@ -13,6 +13,12 @@
 --   driverToken              drv_ token for the SDK, optional
 --   agentDriverName          SDK agent discovery override, optional
 --   stubVersion              reported in `status online`
+--   relayKey                 per-session secret for the agent's LAN relay, optional
+--
+-- Two transports carry the same messages. The broker is always connected; the
+-- LAN relay (through the Anvil agent on this controller, see the protocol
+-- doc's "LAN relay") is used whenever the agent has attached one, and dropped
+-- back from whenever it detaches.
 --
 -- Everything here must return to the Director immediately: the MQTT client
 -- delivers on this same thread, so blocking for a reply would deadlock.
@@ -56,6 +62,10 @@ local MAX_QUEUED_CALLBACKS = 200
 local RECONNECT_BASE_MS = 1000
 local RECONNECT_MAX_MS = 30000
 local CA_FILE_NAME = 'remote4-broker-ca.pem'
+local RELAY_COMMAND = 'REMOTE4_RELAY'
+-- c4_call results kept for a resend: when the relay drops mid-call the CLI
+-- repeats the call over the broker, and it must not run twice.
+local MAX_CACHED_RESPONSES = 32
 
 Log = Log or {}
 for _, level in ipairs({ 'Trace', 'Debug', 'Info', 'Warn', 'Error' }) do
@@ -73,6 +83,9 @@ local state = {
     nextCallback = 0,
     reconnectDelay = RECONNECT_BASE_MS,
     reconnectTimer = nil,
+    relay = nil,          -- { agent = deviceId } while the agent relays for us
+    responses = {},       -- c4_call id -> its c4_response
+    responseOrder = {},
 }
 
 local function topic(name)
@@ -166,7 +179,8 @@ end
 
 -- Publishing ----------------------------------------------------------------
 
-local function send(name, msg)
+local function mqttSend(name, msg)
+    if not (state.connected and state.client) then return false end
     msg.v = PROTOCOL_VERSION
     local payload = json.encode(msg)
     local code, _, err = state.client:Publish(topic(name), payload)
@@ -177,11 +191,36 @@ local function send(name, msg)
     return true
 end
 
+-- One line to the CLI through the agent: { topic, msg }, the same message the
+-- broker would carry on that topic.
+local function relaySend(name, msg)
+    local relay = state.relay
+    if relay == nil then return false end
+    msg.v = PROTOCOL_VERSION
+    local line = json.encode({ topic = name, msg = msg })
+    local ok, err = pcall(function()
+        C4:SendToDevice(relay.agent, RELAY_COMMAND, { session = cfg.session, key = cfg.relayKey, line = line })
+    end)
+    if not ok then
+        Log:Warn('LAN relay send failed, back to the broker: ' .. tostring(err))
+        state.relay = nil
+        return false
+    end
+    return true
+end
+
+-- `via` pins the transport ('relay' or 'mqtt'); without it the relay wins
+-- when attached and the broker carries everything else.
+local function send(name, msg, via)
+    if via == 'mqtt' then return mqttSend(name, msg) end
+    if relaySend(name, msg) then return true end
+    if via == 'relay' then return false end
+    return mqttSend(name, msg)
+end
+
 publish = function(name, msg)
     if state.ended then return end
-    if state.connected and state.client then
-        if send(name, msg) then return end
-    end
+    if send(name, msg) then return end
     if #state.queue >= MAX_QUEUED_CALLBACKS then
         Log:Warn('callback queue full, dropping ' .. tostring(msg.name or name))
         return
@@ -284,7 +323,12 @@ local function forwardDriverError(msg)
 end
 
 local function handleControl(msg)
-    if msg.type == 'token' and type(msg.token) == 'string' then
+    if msg.type == 'relay_detach' then
+        -- The CLI gave up on the relay (it stopped answering) and is back on
+        -- the broker; so are we.
+        if state.relay then Log:Info('LAN relay dropped by the CLI; using the broker') end
+        state.relay = nil
+    elseif msg.type == 'token' and type(msg.token) == 'string' then
         state.token = msg.token
         Log:Debug('broker token refreshed')
     elseif msg.type == 'end' then
@@ -308,9 +352,26 @@ local function handleCallbackResponse(msg)
     end
 end
 
-local function handleMessage(name, msg)
+local function cachedExecute(msg)
+    local id = msg.id
+    if id ~= nil and state.responses[id] then return state.responses[id] end
+    local response = execute(msg)
+    if id ~= nil then
+        state.responses[id] = response
+        local order = state.responseOrder
+        order[#order + 1] = id
+        if #order > MAX_CACHED_RESPONSES then
+            state.responses[table.remove(order, 1)] = nil
+        end
+    end
+    return response
+end
+
+-- `via` is the transport the message came in on; a c4_response goes back the
+-- same way, so a call the CLI repeated over the broker is answered there.
+local function handleMessage(name, msg, via)
     if name == 'c4_call' then
-        send('c4_response', execute(msg))
+        send('c4_response', cachedExecute(msg), via)
     elseif name == 'control' then
         handleControl(msg)
     elseif name == 'callback_response' then
@@ -343,7 +404,7 @@ local function onMessage(...)
         Log:Warn('bad payload on ' .. tostring(name) .. ': ' .. tostring(msg))
         return
     end
-    local okHandle, err = pcall(handleMessage, name, msg)
+    local okHandle, err = pcall(handleMessage, name, msg, 'mqtt')
     if not okHandle then Log:Error('handling ' .. tostring(name) .. ': ' .. tostring(err)) end
 end
 
@@ -366,7 +427,7 @@ local function driverFilename()
 end
 
 local function announce()
-    send('status', { type = 'online', stub = tostring(cfg.stubVersion or 'dev'),
+    state.announced = send('status', { type = 'online', stub = tostring(cfg.stubVersion or 'dev'),
         driver = driverFilename(), handlers = { n = #cfg.handlers, unpack(cfg.handlers) },
         ctx = { env = constants } })
 end
@@ -429,6 +490,62 @@ local function connect()
     end
 end
 
+-- The LAN relay -------------------------------------------------------------
+-- The agent reaches this driver through ExecuteCommand(REMOTE4_RELAY, params),
+-- every message carrying the session and the key the CLI baked in here, so a
+-- peer driver can't speak for the session.
+
+local function relayIn(params)
+    if type(params) ~= 'table' or cfg.relayKey == nil
+        or params.session ~= cfg.session or params.key ~= cfg.relayKey then
+        Log:Debug('ignoring a relay message for another session')
+        return
+    end
+    if state.ended then return end
+    if params.type == 'attach' then
+        local agent = tonumber(params.agent)
+        if agent == nil then return end
+        state.relay = { agent = agent }
+        Log:Info('LAN relay attached through device ' .. tostring(agent) .. '; C4 calls bypass the broker')
+        -- The ack is how the CLI learns the whole path works.
+        relaySend('relay', { type = 'attached' })
+        -- Announced over the broker already, unless it is down.
+        if not state.announced then announce() end
+        flushQueue()
+        return
+    end
+    if params.type == 'detach' then
+        if state.relay then Log:Info('LAN relay detached; using the broker') end
+        state.relay = nil
+        return
+    end
+    local ok, envelope = pcall(json.decode, params.line or '')
+    if not ok or type(envelope) ~= 'table' or type(envelope.topic) ~= 'string' or type(envelope.msg) ~= 'table' then
+        Log:Warn('bad relay message: ' .. tostring(envelope))
+        return
+    end
+    if envelope.topic == 'ping' then
+        relaySend('relay', { type = 'pong', id = envelope.msg.id })
+        return
+    end
+    local okHandle, err = pcall(handleMessage, envelope.topic, envelope.msg, 'relay')
+    if not okHandle then Log:Error('handling ' .. tostring(envelope.topic) .. ': ' .. tostring(err)) end
+end
+
+-- Installed from OnDriverInit, after the SDK has wrapped ExecuteCommand and
+-- run its one-shot check that nothing replaced its handler globals (it runs
+-- before the first instrumented callback's body). Relay traffic is one message
+-- per C4 call, so it must not become an Anvil event or reach the driver.
+local function installRelayEntry()
+    if cfg.relayKey == nil or state.relayEntry then return end
+    local inner = ExecuteCommand
+    state.relayEntry = function(command, params)
+        if command == RELAY_COMMAND then return relayIn(params) end
+        if inner then return inner(command, params) end
+    end
+    ExecuteCommand = state.relayEntry
+end
+
 scheduleReconnect = function()
     if state.ended or state.reconnectTimer then return end
     local delay = state.reconnectDelay
@@ -461,6 +578,7 @@ for name in pairs(wanted) do
 end
 
 function OnDriverInit(...)
+    installRelayEntry()
     connect()
     if wanted.OnDriverInit then forward('OnDriverInit', ...) end
 end
@@ -472,6 +590,7 @@ end
 function OnDriverDestroyed(...)
     if wanted.OnDriverDestroyed then forward('OnDriverDestroyed', ...) end
     state.ended = true
+    state.relay = nil
     if state.client then pcall(function() state.client:Disconnect() end) end
 end
 
@@ -490,5 +609,6 @@ Remote4 = {
     _internals = {
         state = state, topic = topic, encodeValue = encodeValue, decodeValue = decodeValue, constants = constants,
         execute = execute, forward = forward, onMessage = onMessage, handleMessage = handleMessage,
+        relayIn = relayIn,
     },
 }

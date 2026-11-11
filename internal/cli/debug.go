@@ -17,6 +17,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/driverforge/cli/internal/agent"
 	"github.com/driverforge/cli/internal/auth"
 	"github.com/driverforge/cli/internal/buildinfo"
 	"github.com/driverforge/cli/internal/clierr"
@@ -44,6 +45,10 @@ local Lua process running your source, and executes the C4 API calls your
 code makes against the real controller. Save a file and the next callback runs
 the new code. Attach your usual Lua debugger to the local process.
 
+When the controller's agent supports it, the session's traffic goes over your
+local network through the agent rather than through the cloud, so each C4 call
+costs a LAN round trip. The cloud connection stays up as the fallback.
+
 Ctrl+C ends the session; run 'driverforge deploy' to restore your driver.`,
 		Args:   cobra.NoArgs,
 		Hidden: !experimental("debug"),
@@ -62,6 +67,7 @@ Ctrl+C ends the session; run 'driverforge deploy' to restore your driver.`,
 	cmd.Flags().StringVar(&o.lua, "lua", "", "Lua 5.1 interpreter to run the driver with (default: lua5.1, luajit or lua on PATH)")
 	cmd.Flags().StringVar(&o.mobdebug, "mobdebug", "", "start mobdebug in the local process and connect to host:port (ZeroBrane, VS Code)")
 	cmd.Flags().BoolVar(&o.noReload, "no-reload", false, "don't reload the driver when source files change")
+	cmd.Flags().BoolVar(&o.noRelay, "no-relay", false, "send everything through the cloud, not over the local network through the agent")
 	return cmd
 }
 
@@ -72,6 +78,7 @@ type debugOptions struct {
 	lua           string
 	mobdebug      string
 	noReload      bool
+	noRelay       bool
 }
 
 const (
@@ -89,6 +96,7 @@ type debugEnv struct {
 	endpoint remote4.BrokerEndpoint
 	dev      orgctx.Device
 	session  string
+	relayKey string
 }
 
 func prepareDebug(ctx context.Context, out io.Writer, o debugOptions) (debugEnv, error) {
@@ -128,7 +136,12 @@ func prepareDebug(ctx context.Context, out io.Writer, o debugOptions) (debugEnv,
 	if err != nil {
 		return env, err
 	}
-	return debugEnv{proj: proj, cfg: cfg, userID: creds.Subject, token: token, endpoint: endpoint, dev: dev, session: newSessionID()}, nil
+	relayKey, err := remote4.NewRelayKey()
+	if err != nil {
+		return env, err
+	}
+	return debugEnv{proj: proj, cfg: cfg, userID: creds.Subject, token: token, endpoint: endpoint, dev: dev,
+		session: newSessionID(), relayKey: relayKey}, nil
 }
 
 // buildStub builds the real driver as deploy would, unencrypted, then swaps its
@@ -151,6 +164,9 @@ func buildStub(ctx context.Context, cmd *cobra.Command, out io.Writer, o debugOp
 		BrokerHost: env.endpoint.Host, BrokerPort: env.endpoint.Port, BrokerTLS: env.endpoint.TLS,
 		SkipHostnameCheck: env.endpoint.TLS, CAPEM: string(remote4.BrokerCA()),
 		DriverToken: stubDriverToken(ctx, out, env.cfg, sdk != nil), StubVersion: strings.TrimPrefix(buildinfo.String(), "driverforge "),
+	}
+	if !o.noRelay {
+		stubCfg.RelayKey = env.relayKey
 	}
 	stubPath = filepath.Join(env.proj.DistDir, res.ArtifactName+"-remote4.c4z")
 	if err := remote4.RewriteC4z(res.C4zPath, stubPath, remote4.Bundle(stubCfg, sdk)); err != nil {
@@ -248,10 +264,18 @@ func runDebug(cmd *cobra.Command, o debugOptions) error {
 	if err != nil {
 		return err
 	}
-	defer broker.Close()
+	transport := remote4.NewTransport(broker, env.userID, env.session, func(s remote4.RelayState, cause error) {
+		switch s {
+		case remote4.RelayAttached:
+			ui.Fprintln(out, ui.Success("Local network relay up through the agent: C4 calls skip the cloud"))
+		case remote4.RelayLost:
+			ui.Fprintln(out, ui.Warning("local network relay lost ("+errString(cause)+"); back on the cloud broker"))
+		}
+	})
+	defer transport.Close()
 	ui.Fprintln(out, ui.Success("Connected to broker "+env.endpoint.Host))
 
-	bridge := remote4.NewBridge(rt, broker, env.userID, env.session)
+	bridge := remote4.NewBridge(rt, transport, env.userID, env.session)
 	bridgeDone := make(chan error, 1)
 	go func() { bridgeDone <- bridge.Run(ctx) }()
 
@@ -260,7 +284,13 @@ func runDebug(cmd *cobra.Command, o debugOptions) error {
 		return err
 	}
 
-	// 5. Reload on save, keep the stub's token fresh, render the session.
+	// 5. Move the session onto the LAN when the agent can relay it. The broker
+	// carries everything until then, and again if the relay drops.
+	if !o.noRelay {
+		go openDebugRelay(ctx, out, env, artifact+".c4z", transport)
+	}
+
+	// 6. Reload on save, keep the stub's token fresh, render the session.
 	if !o.noReload {
 		go remote4.Watch(ctx, env.proj.SrcDir, 0, func(changed []string) {
 			ui.Fprintln(out, ui.Muted("  changed: "+strings.Join(changed, ", ")))
@@ -278,6 +308,32 @@ func runDebug(cmd *cobra.Command, o debugOptions) error {
 	_ = endWithContext(endCtx, bridge)
 	ui.Fprintln(out, "\n"+ui.Muted("Debug session ended.")+" Run `driverforge deploy` to restore your driver.")
 	return err
+}
+
+// openDebugRelay opens the LAN relay through the controller's agent and hands
+// it to the transport. Every failure leaves the session on the broker, which
+// already works, so each is a note rather than an error.
+func openDebugRelay(ctx context.Context, out io.Writer, env debugEnv, filename string, transport *remote4.Transport) {
+	onBroker := func(why string) {
+		ui.Fprintln(out, ui.Muted("  "+why+"; C4 calls go through the cloud broker"))
+	}
+	cl, h, err := dialAgent(ctx, env.dev)
+	if err != nil {
+		onBroker("couldn't reach the agent for a local network relay (" + errString(err) + ")")
+		return
+	}
+	if !h.Supports(agent.CapabilityRemote4Relay) {
+		onBroker("the agent on " + env.dev.Name + " can't relay debug traffic yet (update it with `driverforge upgrade`)")
+		return
+	}
+	conn, err := cl.OpenRemote4Relay(ctx, filename, env.session, env.relayKey)
+	if err != nil {
+		onBroker("the agent refused a local network relay (" + errString(err) + ")")
+		return
+	}
+	if err := transport.Attach(ctx, conn); err != nil && ctx.Err() == nil {
+		onBroker("the local network relay didn't come up (" + errString(err) + ")")
+	}
 }
 
 // awaitCompiled waits for the runtime's first message: compiled, or a fatal

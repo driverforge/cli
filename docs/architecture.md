@@ -333,6 +333,34 @@ bridge between them. Callbacks are one-way because a driver cannot block on
 its own event loop; `C4` calls are synchronous from the local driver's point
 of view because only the laptop waits.
 
+Each `C4` call costs a round trip, so the path matters. Once the stub is up,
+the CLI opens a **LAN relay** through the agent when it advertises
+`remote4-relay`: an upgraded connection to the deploy server (same pin, same
+token) that the agent relays to the stub with `C4:SendToDevice`, and the
+stub's replies back. `internal/remote4/relay.go` (`Transport`) sends over the
+relay while it is up and over the broker otherwise, and listens on both. It
+pings the stub through the relay. If the relay closes or goes quiet, it drops
+back to the broker and repeats any unanswered call there; the stub answers a
+repeat from a small cache, so the call does not run twice. `--no-relay` keeps
+the whole session on the broker.
+
+```mermaid
+sequenceDiagram
+  participant CLI as driverforge CLI
+  participant A as Agent deploy server
+  participant S as Remote4 stub
+
+  CLI->>A: GET /remote4, Upgrade: remote4 (session id + relay key)
+  A-->>CLI: 101 Switching Protocols
+  A->>S: SendToDevice REMOTE4_RELAY attach (keyed)
+  S-->>A: SendToDevice REMOTE4_RELAY relay attached (keyed)
+  A-->>CLI: {"topic":"relay","msg":{"type":"attached"}}
+  CLI->>A: {"topic":"c4_call",…}
+  A->>S: SendToDevice REMOTE4_RELAY line
+  S-->>A: c4_response line
+  A-->>CLI: {"topic":"c4_response",…}
+```
+
 ### Runtime telemetry
 
 ```mermaid
@@ -373,7 +401,8 @@ sequenceDiagram
 |---|---|---|
 | CLI ↔ Hydra | login + token refresh | TLS; public client; device-code flow |
 | CLI ↔ Graph | GraphQL operations | Bearer access token (`aud=graph`) |
-| CLI ↔ Agent (LAN) | `.c4z` uploads (RCE-capable) | HTTPS + **pinned** self-signed cert; Bearer token bound to logged-in user; kill-switch |
+| CLI ↔ Agent (LAN) | `.c4z` uploads (RCE-capable); debug-session relay | HTTPS + **pinned** self-signed cert; Bearer token bound to logged-in user; kill-switch |
+| Agent ↔ debug stub | relayed debug-session messages | On-controller inter-device messaging; every message carries the session id and a per-session random key only the CLI and the stub hold |
 | Agent ↔ Hydra | login + per-call tokens | TLS; **audience-narrowed** tokens; refresh token never sent as credential |
 | Agent ↔ MQTT broker | telemetry | JWT (narrowed to `aud=mqtt-broker`); broker host **locked at build time** |
 | Agent ↔ Graph | `registerDevice` | Bearer token (`aud=graph`, `scope=device:register`) |

@@ -15,11 +15,11 @@ func TestBundleBakesConfigAndPreloads(t *testing.T) {
 		SessionID: "s1", UserID: "u1", Token: "jwt \"quoted\"", Handlers: []string{"OnDriverInit", "ReceivedFromProxy"},
 		BrokerHost: "broker.test", BrokerPort: 8883, BrokerTLS: true, SkipHostnameCheck: true,
 		CAPEM:       "-----BEGIN CERTIFICATE-----\nAAA\n-----END CERTIFICATE-----\n",
-		DriverToken: "drv_x", StubVersion: "1.2.3",
+		DriverToken: "drv_x", StubVersion: "1.2.3", RelayKey: "abcd",
 	}
 	b := string(Bundle(cfg, []byte("-- sdk\nDriverforge = {}\n")))
 	for _, want := range []string{
-		`session = "s1"`, `userId = "u1"`, `token = "jwt \"quoted\""`, `driverToken = "drv_x"`,
+		`session = "s1"`, `userId = "u1"`, `token = "jwt \"quoted\""`, `driverToken = "drv_x"`, `relayKey = "abcd"`,
 		`handlers = {"OnDriverInit", "ReceivedFromProxy"}`,
 		`host = "broker.test", port = 8883, tls = true, skipHostnameCheck = true, caPem = [[`,
 		`package.preload["json"] = function(...)`,
@@ -32,6 +32,17 @@ func TestBundleBakesConfigAndPreloads(t *testing.T) {
 	}
 	if !strings.HasPrefix(b, "-- Remote4 stub") {
 		t.Errorf("bundle should open with its banner, got %q", b[:40])
+	}
+}
+
+func TestNewRelayKeyIsLongRandomHex(t *testing.T) {
+	a, err := NewRelayKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := NewRelayKey()
+	if len(a) != 32 || a == b || strings.Trim(a, "0123456789abcdef") != "" {
+		t.Errorf("keys %q %q", a, b)
 	}
 }
 
