@@ -24,13 +24,20 @@ No cgo, no other system dependencies: `CGO_ENABLED=0` builds everywhere.
 ```sh
 make build        # ./driverforge for the host platform
 make install      # go install into $GOBIN / ~/go/bin
-make release      # cross-compile all platforms into dist/
+make release      # cross-compile all platforms into dist/ (not what ships; see below)
 make help         # everything else
 ```
 
 Version metadata (`driverforge version`) is stamped via `-ldflags -X` into
 `internal/buildinfo`; a plain `go build ./cmd/driverforge` works too and
-reports itself as a dev build.
+reports itself as a dev build. `make build` takes the version from
+`git describe`, which only knows the tags in your clone and can be well behind
+the published release. Set it when the version matters, for example to test a
+build that `driverforge upgrade` and the update notice should treat as newer:
+
+```sh
+make build VERSION=1.0.2-next.$(git rev-parse --short HEAD)
+```
 
 The production endpoints (auth, API, telemetry) are compiled-in defaults that
 can be overridden per build (`make build-dev` targets a local dev stack) or
@@ -38,6 +45,39 @@ per run via `DRIVERFORGE_*` env vars — see `internal/*/endpoints.go`. Metrics
 and crash-reporting sinks default **empty** in source ("wired but dark"):
 a source build never sends telemetry anywhere. Usage metrics are opt-in
 (prompted once) and associated with the signed-in Driverforge account.
+
+### Release builds
+
+Releases are built by [GoReleaser](https://goreleaser.com) from
+[`.goreleaser.yaml`](.goreleaser.yaml), not by `make release`. Beyond the
+version, a release build bakes in the crash-reporting DSN, the usage-metrics
+token and the `go.driverforge.com` short-link base; everything else is the
+same code `make build` compiles. To produce release-shaped binaries locally
+without publishing anything:
+
+```sh
+GORELEASER_CURRENT_TAG=v1.0.1 goreleaser build --snapshot --clean --single-target   # → dist/, version 1.0.2-next
+```
+
+A snapshot is versioned as the next patch after the current tag, which
+GoReleaser also reads from `git describe`; pin it to the latest published
+release (`driverforge --version` on an installed copy; `v1.0.1` above is an
+example) or the snapshot will carry an old version. The same applies to the
+`VERSION` values in the `make build` examples.
+
+Leave the DSN and token unset (as above) for a local build, so it reports
+nothing anywhere.
+
+To try an unreleased build next to the one you have installed, give it a
+different name rather than replacing yours:
+
+```sh
+make build VERSION=1.0.2-next.$(git rev-parse --short HEAD)
+install -m 0755 driverforge "$(go env GOPATH)/bin/driverforge-next"
+```
+
+Don't let `driverforge upgrade` update the CLI from such a build: it replaces
+the running binary with the published release.
 
 ## Test
 
