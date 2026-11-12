@@ -32,6 +32,6 @@ func Celebrate(headline string) string {
 func Heading(msg string) string { return titleStyle.Render(msg) }
 
 // Failure renders a red error line for inline status output where the
-// process keeps going (a failed callback in a debug session, say) — the
+// process keeps going (a failed callback under `driverforge run`, say) — the
 // counterpart of Success/Warning, not a fatal-error banner.
 func Failure(msg string) string { return errStyle.Render(msg) }

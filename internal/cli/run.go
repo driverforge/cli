@@ -29,57 +29,69 @@ import (
 	"github.com/driverforge/cli/internal/ui"
 )
 
-// newDebugCmd starts a Remote4 live-debug session: the driver's Lua runs in
+// newRunCmd runs the driver locally through Remote4: the driver's Lua runs in
 // a local process while a stub on the controller forwards every callback to
 // it and executes its C4 calls. See docs/remote4-protocol.md in the platform repo.
-func newDebugCmd() *cobra.Command {
-	var o debugOptions
+func newRunCmd() *cobra.Command {
+	var o runOptions
 	cmd := &cobra.Command{
-		Use:   "debug",
-		Short: "Run the driver locally against a real controller (live debug)",
-		Long: `Run your driver's Lua on this machine while a real controller drives it.
+		Use:   "run",
+		Short: "Run the driver locally against a real controller",
+		Long: `Run your driver's Lua on this machine while a real controller drives it,
+with no build or deploy between changes: save a file, trigger the action
+again, and the new code handles it.
 
-A stub driver replaces yours on the controller for the session. It forwards
+A stub driver replaces yours on the controller while this runs. It forwards
 every callback (ReceivedFromProxy, OnPropertyChanged, OnTimerExpired, …) to a
 local Lua process running your source, and executes the C4 API calls your
-code makes against the real controller. Save a file and the next callback runs
-the new code. Attach your usual Lua debugger to the local process.
+code makes against the real controller. To step through the code, pass
+--debug and connect a Lua debugger (ZeroBrane Studio, or VS Code with a
+mobdebug extension) listening on localhost:8172, or --debug=host:port for
+another address.
 
 When the controller's agent supports it, the session's traffic goes over your
 local network through the agent rather than through the cloud, so each C4 call
 costs a LAN round trip. The cloud connection stays up as the fallback.
 
-Ctrl+C ends the session; run 'driverforge deploy' to restore your driver.`,
+Ctrl+C stops it; run 'driverforge deploy' to restore your driver, or pass
+--deploy-on-exit to have run deploy it for you when it stops.`,
 		Args:   cobra.NoArgs,
-		Hidden: !experimental("debug"),
+		Hidden: !experimental("run"),
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if !experimental("debug") {
+			if !experimental("run") {
 				return clierr.WithCode(clierr.UserT("Not available yet",
-					"driverforge debug isn't available in this release",
+					"driverforge run isn't available in this release",
 					"it's coming soon"), codeNotAvailable)
 			}
-			return runDebug(cmd, o)
+			return runLocally(cmd, o)
 		},
 	}
-	cmd.Flags().StringVarP(&o.configuration, "configuration", "c", "", "build configuration to debug (selects config.<name>.lua)")
-	cmd.Flags().StringVar(&o.device, "device", "", "controller to debug on (name, hostname, or id)")
+	cmd.Flags().StringVarP(&o.configuration, "configuration", "c", "", "build configuration to run (selects config.<name>.lua)")
+	cmd.Flags().StringVar(&o.device, "device", "", "controller to run against (name, hostname, or id)")
 	cmd.Flags().BoolVar(&o.selectDevice, "select", false, "re-select the target controller first")
 	cmd.Flags().StringVar(&o.lua, "lua", "", "Lua 5.1 interpreter to run the driver with (default: lua5.1, luajit or lua on PATH)")
-	cmd.Flags().StringVar(&o.mobdebug, "mobdebug", "", "start mobdebug in the local process and connect to host:port (ZeroBrane, VS Code)")
+	cmd.Flags().StringVar(&o.debugAddr, "debug", "", "connect the local Lua process to a Lua debugger listening at host:port")
+	cmd.Flags().Lookup("debug").NoOptDefVal = defaultDebugAddr
 	cmd.Flags().BoolVar(&o.noReload, "no-reload", false, "don't reload the driver when source files change")
 	cmd.Flags().BoolVar(&o.noRelay, "no-relay", false, "send everything through the cloud, not over the local network through the agent")
+	cmd.Flags().BoolVar(&o.deployOnExit, "deploy-on-exit", false, "when it stops, build and deploy the driver to replace the stub, as driverforge deploy would")
 	return cmd
 }
 
-type debugOptions struct {
+type runOptions struct {
 	configuration string
 	device        string
 	selectDevice  bool
 	lua           string
-	mobdebug      string
+	debugAddr     string
 	noReload      bool
 	noRelay       bool
+	deployOnExit  bool
 }
+
+// defaultDebugAddr is where --debug connects without a value: ZeroBrane
+// Studio's default mobdebug port.
+const defaultDebugAddr = "localhost:8172"
 
 const (
 	runtimeReadyTimeout = 30 * time.Second
@@ -87,8 +99,8 @@ const (
 	runtimeStopTimeout  = 3 * time.Second
 )
 
-// debugEnv is everything a session needs before it touches the controller.
-type debugEnv struct {
+// runEnv is everything a session needs before it touches the controller.
+type runEnv struct {
 	proj     project.Project
 	cfg      *driverforgeconfig.Config
 	userID   string
@@ -99,8 +111,8 @@ type debugEnv struct {
 	relayKey string
 }
 
-func prepareDebug(ctx context.Context, out io.Writer, o debugOptions) (debugEnv, error) {
-	var env debugEnv
+func prepareRun(ctx context.Context, out io.Writer, o runOptions) (runEnv, error) {
+	var env runEnv
 	proj, err := requireProject(flagProjectDir)
 	if err != nil {
 		return env, err
@@ -119,13 +131,13 @@ func prepareDebug(ctx context.Context, out io.Writer, o debugOptions) (debugEnv,
 	token, err := auth.MQTTAccessToken(ctx)
 	if err != nil {
 		if errors.Is(err, auth.ErrSessionExpired) {
-			return env, clierr.WithCode(clierr.WrapT(err, "Session expired", "your sign-in has expired, so the debug session can't start",
-				"run `driverforge login`, then `driverforge debug` again"), codeAuthRequired)
+			return env, clierr.WithCode(clierr.WrapT(err, "Session expired", "your sign-in has expired, so the driver can't start",
+				"run `driverforge login`, then `driverforge run` again"), codeAuthRequired)
 		}
 		if ctx.Err() != nil || clierr.IsUser(err) {
 			return env, err // already says what went wrong — don't flatten it to "unreachable"
 		}
-		return env, clierr.WithCode(clierr.WrapT(err, "Driverforge unreachable", "couldn't reach Driverforge to start the debug session",
+		return env, clierr.WithCode(clierr.WrapT(err, "Driverforge unreachable", "couldn't reach Driverforge to start the driver",
 			"check your connection and try again"), codeConnectionLost)
 	}
 	endpoint, err := remote4.ResolveBroker()
@@ -140,14 +152,14 @@ func prepareDebug(ctx context.Context, out io.Writer, o debugOptions) (debugEnv,
 	if err != nil {
 		return env, err
 	}
-	return debugEnv{proj: proj, cfg: cfg, userID: creds.Subject, token: token, endpoint: endpoint, dev: dev,
+	return runEnv{proj: proj, cfg: cfg, userID: creds.Subject, token: token, endpoint: endpoint, dev: dev,
 		session: newSessionID(), relayKey: relayKey}, nil
 }
 
 // buildStub builds the real driver as deploy would, unencrypted, then swaps its
 // script for the stub bundle. driver.xml is untouched. It returns the stub
 // package's path and the driver's artifact name.
-func buildStub(ctx context.Context, cmd *cobra.Command, out io.Writer, o debugOptions, env debugEnv, handlers []string) (stubPath, artifact string, err error) {
+func buildStub(ctx context.Context, cmd *cobra.Command, out io.Writer, o runOptions, env runEnv, handlers []string) (stubPath, artifact string, err error) {
 	opts, err := deployBuildOptions(o.configuration)
 	if err != nil {
 		return "", "", err
@@ -189,7 +201,7 @@ func stubDriverToken(ctx context.Context, out io.Writer, cfg *driverforgeconfig.
 	return t
 }
 
-func connectDebugBroker(ctx context.Context, out io.Writer, env debugEnv) (remote4.Broker, error) {
+func connectRunBroker(ctx context.Context, out io.Writer, env runEnv) (remote4.Broker, error) {
 	broker, err := remote4.Connect(ctx, remote4.BrokerOptions{
 		Endpoint: env.endpoint,
 		ClientID: env.userID + "|remote4-cli-" + env.session,
@@ -210,23 +222,23 @@ func connectDebugBroker(ctx context.Context, out io.Writer, env debugEnv) (remot
 	return broker, nil
 }
 
-func runDebug(cmd *cobra.Command, o debugOptions) error {
+func runLocally(cmd *cobra.Command, o runOptions) error {
 	out := textOut(cmd)
 	// The session's events are its output: lines for a person, or one JSON
 	// object per event on stdout under structured output.
-	render := func(e remote4.Event) { renderDebugEvent(out, e) }
+	render := func(e remote4.Event) { renderRunEvent(out, e) }
 	if structured() {
 		stdout := cmd.OutOrStdout()
-		render = func(e remote4.Event) { writeJSON(stdout, debugEventOf(e)) }
+		render = func(e remote4.Event) { writeJSON(stdout, runEventOf(e)) }
 	}
 	ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	env, err := prepareDebug(ctx, out, o)
+	env, err := prepareRun(ctx, out, o)
 	if err != nil {
 		return err
 	}
-	ui.Fprintln(out, "\n"+ui.DeployHeading("Debugging "+env.cfg.Project.Name+" on", env.dev.Name))
+	ui.Fprintln(out, "\n"+ui.DeployHeading("Running "+env.cfg.Project.Name+" locally against", env.dev.Name))
 	ui.Fprintln(out, ui.Muted("  session "+env.session))
 
 	// 1. The local runtime first: a driver that doesn't compile never touches
@@ -239,7 +251,7 @@ func runDebug(cmd *cobra.Command, o debugOptions) error {
 	}
 	rt, err := remote4.StartRuntime(ctx, remote4.RuntimeOptions{
 		Lua: o.lua, SrcDir: env.proj.SrcDir, Entry: env.cfg.Entry, Configuration: o.configuration,
-		MobDebug: o.mobdebug, Stderr: out,
+		MobDebug: o.debugAddr, Stderr: out,
 	})
 	if err != nil {
 		return clierr.WithCode(clierr.Wrap(err, "couldn't start the local Lua runtime",
@@ -260,7 +272,7 @@ func runDebug(cmd *cobra.Command, o debugOptions) error {
 	defer os.Remove(stubPath)
 
 	// 3. Our end of the broker before the stub's, so no early callback is lost.
-	broker, err := connectDebugBroker(ctx, out, env)
+	broker, err := connectRunBroker(ctx, out, env)
 	if err != nil {
 		return err
 	}
@@ -287,7 +299,7 @@ func runDebug(cmd *cobra.Command, o debugOptions) error {
 	// 5. Move the session onto the LAN when the agent can relay it. The broker
 	// carries everything until then, and again if the relay drops.
 	if !o.noRelay {
-		go openDebugRelay(ctx, out, env, artifact+".c4z", transport)
+		go openRunRelay(ctx, out, env, artifact+".c4z", transport)
 	}
 
 	// 6. Reload on save, keep the stub's token fresh, render the session.
@@ -299,21 +311,48 @@ func runDebug(cmd *cobra.Command, o debugOptions) error {
 	}
 	go refreshStubToken(ctx, bridge, env.token)
 
-	ui.Fprintln(out, "\n"+ui.Success("Debug session active. Ctrl+C to stop.")+"\n")
-	err = renderDebugEvents(ctx, out, render, bridge, bridgeDone, handlers)
+	ui.Fprintln(out, "\n"+ui.Success("Running. Ctrl+C to stop.")+"\n")
+	err = renderRunEvents(ctx, out, render, bridge, bridgeDone, handlers)
 
 	// Teardown in order: tell the stub, stop the runtime, then disconnect.
 	endCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = endWithContext(endCtx, bridge)
-	ui.Fprintln(out, "\n"+ui.Muted("Debug session ended.")+" Run `driverforge deploy` to restore your driver.")
+	if o.deployOnExit {
+		return deployOnExit(cmd, out, o, env, err)
+	}
+	ui.Fprintln(out, "\n"+ui.Muted("Stopped.")+" Run `driverforge deploy` to restore your driver.")
 	return err
 }
 
-// openDebugRelay opens the LAN relay through the controller's agent and hands
+// deployOnExit replaces the stub with the real driver once a run stops: it
+// builds and deploys the driver as `driverforge deploy` would, to the
+// controller the run used. Only reached once the stub is installed. The run's
+// context is already cancelled by then, so the deploy gets its own, which a
+// second Ctrl+C still cancels.
+func deployOnExit(cmd *cobra.Command, out io.Writer, o runOptions, env runEnv, runErr error) error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	ui.Fprintln(out, "\n"+ui.Muted("Stopped. Deploying "+env.cfg.Project.Name+" to replace the stub…"))
+	res, err := buildForDeploy(cmd, o.configuration)
+	if err == nil {
+		err = runDeployToDevice(ctx, out, env.dev, res.C4zPath, res.ArtifactName, false)
+	}
+	if err != nil {
+		ui.Fprintln(out, ui.Warning("the stub is still installed on "+env.dev.Name+"; run `driverforge deploy` to restore your driver"))
+		if runErr != nil {
+			return runErr
+		}
+		return err
+	}
+	ui.Fprintln(out, ui.Success("Deployed "+res.ArtifactName+" to "+env.dev.Name+", replacing the stub"))
+	return runErr
+}
+
+// openRunRelay opens the LAN relay through the controller's agent and hands
 // it to the transport. Every failure leaves the session on the broker, which
 // already works, so each is a note rather than an error.
-func openDebugRelay(ctx context.Context, out io.Writer, env debugEnv, filename string, transport *remote4.Transport) {
+func openRunRelay(ctx context.Context, out io.Writer, env runEnv, filename string, transport *remote4.Transport) {
 	onBroker := func(why string) {
 		ui.Fprintln(out, ui.Muted("  "+why+"; C4 calls go through the cloud broker"))
 	}
@@ -323,7 +362,7 @@ func openDebugRelay(ctx context.Context, out io.Writer, env debugEnv, filename s
 		return
 	}
 	if !h.Supports(agent.CapabilityRemote4Relay) {
-		onBroker("the agent on " + env.dev.Name + " can't relay debug traffic yet (update it with `driverforge upgrade`)")
+		onBroker("the agent on " + env.dev.Name + " can't relay over the local network yet (update it with `driverforge upgrade`)")
 		return
 	}
 	conn, err := cl.OpenRemote4Relay(ctx, filename, env.session, env.relayKey)
@@ -357,7 +396,7 @@ func awaitCompiled(ctx context.Context, out io.Writer, rt *remote4.Runtime) (rem
 				return m, nil
 			case "fatal":
 				return remote4.Message{}, clierr.WithCode(clierr.UserT("Driver failed to compile", m.Error,
-					"fix the error and run `driverforge debug` again"), codeBuildFailed)
+					"fix the error and run `driverforge run` again"), codeBuildFailed)
 			case "print", "raw":
 				ui.Fprintln(out, "  | "+m.Text)
 			}
@@ -399,7 +438,7 @@ func refreshStubToken(ctx context.Context, bridge *remote4.Bridge, current strin
 	}
 }
 
-func renderDebugEvents(ctx context.Context, out io.Writer, render func(remote4.Event), bridge *remote4.Bridge, bridgeDone <-chan error, stubHandlers []string) error {
+func renderRunEvents(ctx context.Context, out io.Writer, render func(remote4.Event), bridge *remote4.Bridge, bridgeDone <-chan error, stubHandlers []string) error {
 	loadSent := false
 	for {
 		select {
@@ -409,22 +448,22 @@ func renderDebugEvents(ctx context.Context, out io.Writer, render func(remote4.E
 			if errors.Is(err, context.Canceled) {
 				return nil
 			}
-			return clierr.Wrap(err, "the debug session stopped", "")
+			return clierr.Wrap(err, "the session stopped", "")
 		case e, ok := <-bridge.Events():
 			if !ok {
 				continue
 			}
 			render(e)
-			if err := onDebugEvent(out, bridge, e, stubHandlers, &loadSent); err != nil {
+			if err := onRunEvent(out, bridge, e, stubHandlers, &loadSent); err != nil {
 				return err
 			}
 		}
 	}
 }
 
-// onDebugEvent reacts to the events that drive the session, beyond rendering
+// onRunEvent reacts to the events that drive the session, beyond rendering
 // them.
-func onDebugEvent(out io.Writer, bridge *remote4.Bridge, e remote4.Event, stubHandlers []string, loadSent *bool) error {
+func onRunEvent(out io.Writer, bridge *remote4.Bridge, e remote4.Event, stubHandlers []string, loadSent *bool) error {
 	switch e.Kind {
 	case remote4.EventStubOnline:
 		// The driver runs only now: its file-scope C4 calls need the stub.
@@ -438,13 +477,13 @@ func onDebugEvent(out io.Writer, bridge *remote4.Bridge, e remote4.Event, stubHa
 	case remote4.EventReady:
 		if missing := remote4.Missing(stubHandlers, e.Message.Handlers); len(missing) > 0 {
 			ui.Fprintln(out, ui.Warning("defined at runtime, not forwarded by the stub: "+strings.Join(missing, ", ")+
-				" — define them at file scope, then restart `driverforge debug`"))
+				" — define them at file scope, then restart `driverforge run`"))
 		}
 	}
 	return nil
 }
 
-func renderDebugEvent(out io.Writer, e remote4.Event) {
+func renderRunEvent(out io.Writer, e remote4.Event) {
 	m := e.Message
 	switch e.Kind {
 	case remote4.EventStubOnline:
@@ -543,8 +582,8 @@ func errOrExit(err error) error {
 	return err
 }
 
-// debugEventKinds names each event kind in structured output.
-var debugEventKinds = map[remote4.EventKind]string{
+// runEventKinds names each event kind in structured output.
+var runEventKinds = map[remote4.EventKind]string{
 	remote4.EventCompiled:       "compiled",
 	remote4.EventReady:          "ready",
 	remote4.EventCallback:       "callback",
@@ -561,10 +600,10 @@ var debugEventKinds = map[remote4.EventKind]string{
 	remote4.EventRuntimeExited:  "runtime_exited",
 }
 
-// debugEventOut is one debug session event in structured output. Unlike the
+// runEventOut is one run session event in structured output. Unlike the
 // text view it reports every event, verbose or not; fields an event doesn't
 // carry are left out.
-type debugEventOut struct {
+type runEventOut struct {
 	Event    string          `json:"event"`
 	Summary  string          `json:"summary,omitempty"`
 	Name     string          `json:"name,omitempty"`
@@ -580,10 +619,10 @@ type debugEventOut struct {
 	Driver   string          `json:"driver,omitempty"`
 }
 
-func debugEventOf(e remote4.Event) debugEventOut {
+func runEventOf(e remote4.Event) runEventOut {
 	m := e.Message
-	o := debugEventOut{
-		Event: firstNonEmpty(debugEventKinds[e.Kind], "unknown"),
+	o := runEventOut{
+		Event: firstNonEmpty(runEventKinds[e.Kind], "unknown"),
 		Name:  m.Name, Method: m.Method, Args: m.Args, Results: m.Results,
 		OK: m.OK, Handled: m.Handled, Level: m.Level, Text: m.Text, Error: m.Error,
 		Handlers: m.Handlers, Driver: m.Driver,

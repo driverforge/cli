@@ -142,7 +142,7 @@ keeps text output.`,
 	// Match the `version` subcommand's CLI line (cobra's default template says
 	// just "driverforge version dev", dropping the commit and build date).
 	root.SetVersionTemplate(buildinfo.String() + "\n")
-	root.AddCommand(newBuildCmd(), newInitCmd(), newPublishCmd(), newDeployCmd(), newSyncCmd(), newDebugCmd(), newVersionCmd())
+	root.AddCommand(newBuildCmd(), newInitCmd(), newPublishCmd(), newDeployCmd(), newSyncCmd(), newRunCmd(), newVersionCmd())
 	root.AddCommand(newLoginCmd(), newLogoutCmd(), newWhoamiCmd(), newOrgCmd(), newDeviceCmd())
 	root.AddCommand(newUpgradeCmd(), newDoctorCmd(), newSkillsCmd())
 	root.AddCommand(newLogsCmd(), newErrorsCmd(), newEventsCmd(), newGetCmd())

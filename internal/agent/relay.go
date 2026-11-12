@@ -8,13 +8,13 @@ import (
 )
 
 // CapabilityRemote4Relay is advertised in /healthz capabilities by agents
-// that can relay a `driverforge debug` session to its stub over the LAN
+// that can relay a `driverforge run` session to its stub over the LAN
 // (GET /remote4, an upgraded connection carrying JSON lines both ways).
 const CapabilityRemote4Relay = "remote4-relay"
 
-// OpenRemote4Relay upgrades a connection to the deploy server into a debug
+// OpenRemote4Relay upgrades a connection to the deploy server into a run
 // session's LAN relay to the stub installed as filename. session and key are
-// the debug session's id and the relay key baked into its stub. The returned
+// the session's id and the relay key baked into its stub. The returned
 // connection carries newline-delimited JSON in both directions until closed;
 // it outlives ctx once open.
 func (c *Client) OpenRemote4Relay(ctx context.Context, filename, session, key string) (io.ReadWriteCloser, error) {

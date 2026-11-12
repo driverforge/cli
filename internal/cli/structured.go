@@ -23,7 +23,7 @@ import (
 // for a program rather than a person:
 //
 //   - stdout carries one JSON document: the command's result, or {"error": …}
-//     when it fails. Commands that stream (logs --follow, debug) write one JSON
+//     when it fails. Commands that stream (logs --follow, run) write one JSON
 //     object per line instead.
 //   - stderr carries JSON lines: {"progress": …} as work happens, then
 //     {"error": …} if it fails.

@@ -1,4 +1,4 @@
-// Package remote4 implements the laptop side of the Remote4 live-debug proxy:
+// Package remote4 implements the laptop side of the Remote4 local-run proxy:
 // bundling and deploying the stub driver, the broker connection, the local
 // Lua runtime, and the bridge that relays messages between them. The wire
 // contract is docs/remote4-protocol.md in the platform repo the assets are

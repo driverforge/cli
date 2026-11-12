@@ -33,7 +33,7 @@ var (
 	// Deliberately still the original "anvil-agent": renaming it means updating the
 	// deployed agents and Hydra together, deferred from the CLI rename.
 	AgentAudience = "anvil-agent"
-	// MQTTAudience is the Anvil broker audience. `driverforge debug` mints a
+	// MQTTAudience is the Anvil broker audience. `driverforge run` mints a
 	// broker-only token for its own connection and bakes one into the Remote4
 	// stub, so neither can be replayed against graph or the agent.
 	MQTTAudience = "mqtt-broker"

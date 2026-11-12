@@ -1,5 +1,5 @@
 -- The Remote4 stub: a driver with no business logic that stands in for the
--- real driver on the controller during `driverforge debug`.
+-- real driver on the controller during `driverforge run`.
 --
 -- Globals it owns: one forwarder per handler name in REMOTE4.handlers, plus
 -- OnDriverInit / OnDriverLateInit / OnDriverDestroyed, Log (so the SDK can
@@ -27,7 +27,7 @@ local json = require('json')
 local unpack = table.unpack or unpack
 local function pack(...) return { n = select('#', ...), ... } end
 
-local cfg = REMOTE4 or error('REMOTE4 config missing: this file is meant to be bundled by driverforge debug', 0)
+local cfg = REMOTE4 or error('REMOTE4 config missing: this file is meant to be bundled by driverforge run', 0)
 
 -- Director's constant tables (C4SystemEvents and the like) exist only here on
 -- the controller. Capture every flat, data-only global before the stub or the
@@ -334,7 +334,7 @@ local function handleControl(msg)
     elseif msg.type == 'end' then
         state.ended = true
         state.queue = {}
-        Log:Info('Debug session ended. Run `driverforge deploy` to restore the real driver.')
+        Log:Info('driverforge run stopped. Run `driverforge deploy` to restore the real driver.')
         if state.client then pcall(function() state.client:Disconnect() end) end
     elseif msg.type == 'log' then
         forwardDriverLog(msg)
@@ -452,7 +452,7 @@ local function connect()
     client:OnConnect(function()
         state.connected = true
         state.reconnectDelay = RECONNECT_BASE_MS
-        Log:Info('connected to broker; debug session ' .. cfg.session .. ' live')
+        Log:Info('connected to broker; session ' .. cfg.session .. ' live')
         subscribe(client)
         announce()
         flushQueue()

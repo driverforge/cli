@@ -77,7 +77,7 @@ const (
 	codeSyncFailed         = "sync_failed"
 	codeDeployRequired     = "deploy_required"
 
-	// Live debugging.
+	// Running a driver locally.
 	codeRuntimeUnavailable = "runtime_unavailable"
 
 	// Agent skills.

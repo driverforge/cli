@@ -1,4 +1,4 @@
--- The Remote4 runtime: the plain Lua process `driverforge debug` spawns on
+-- The Remote4 runtime: the plain Lua process `driverforge run` spawns on
 -- the developer's machine. It loads the driver's source, dispatches the
 -- callbacks the CLI relays from the controller, and proxies every `C4` call
 -- back through the CLI. Protocol: docs/remote4-protocol.md "CLI ↔ runtime".

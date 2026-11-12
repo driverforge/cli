@@ -8,30 +8,30 @@ import (
 )
 
 func TestExperimental(t *testing.T) {
-	for env, want := range map[string]bool{"": false, "debug": true, "publish, Debug": true, "all": true, "debugger": false} {
+	for env, want := range map[string]bool{"": false, "run": true, "publish, Run": true, "all": true, "runner": false} {
 		t.Setenv("DRIVERFORGE_EXPERIMENTAL", env)
-		if got := experimental("debug"); got != want {
-			t.Errorf("DRIVERFORGE_EXPERIMENTAL=%q: experimental(debug) = %v, want %v", env, got, want)
+		if got := experimental("run"); got != want {
+			t.Errorf("DRIVERFORGE_EXPERIMENTAL=%q: experimental(run) = %v, want %v", env, got, want)
 		}
 	}
 }
 
-// Unreleased, debug is hidden from help and refuses to run with a friendly
+// Unreleased, run is hidden from help and refuses to run with a friendly
 // not_available card; switched on, it is listed and runs.
-func TestDebugIsGatedBehindExperimental(t *testing.T) {
+func TestRunIsGatedBehindExperimental(t *testing.T) {
 	t.Setenv("DRIVERFORGE_EXPERIMENTAL", "")
-	cmd := newDebugCmd()
+	cmd := newRunCmd()
 	if !cmd.Hidden {
-		t.Error("debug should be hidden from help until switched on")
+		t.Error("run should be hidden from help until switched on")
 	}
 	err := cmd.RunE(cmd, nil)
 	var ue *clierr.UserError
 	if !errors.As(err, &ue) || ue.Code != codeNotAvailable {
-		t.Fatalf("gated debug returned %v, want a %s UserError", err, codeNotAvailable)
+		t.Fatalf("gated run returned %v, want a %s UserError", err, codeNotAvailable)
 	}
 
-	t.Setenv("DRIVERFORGE_EXPERIMENTAL", "debug")
-	if newDebugCmd().Hidden {
-		t.Error("debug should be listed once switched on")
+	t.Setenv("DRIVERFORGE_EXPERIMENTAL", "run")
+	if newRunCmd().Hidden {
+		t.Error("run should be listed once switched on")
 	}
 }

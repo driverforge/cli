@@ -297,7 +297,7 @@ sequenceDiagram
   A-->>CLI: streamed progress → confirmed / failed / confirmed-with-errors
 ```
 
-### Live debug (`driverforge debug`, Remote4)
+### Running locally (`driverforge run`, Remote4)
 
 ```mermaid
 sequenceDiagram
@@ -401,8 +401,8 @@ sequenceDiagram
 |---|---|---|
 | CLI ↔ Hydra | login + token refresh | TLS; public client; device-code flow |
 | CLI ↔ Graph | GraphQL operations | Bearer access token (`aud=graph`) |
-| CLI ↔ Agent (LAN) | `.c4z` uploads (RCE-capable); debug-session relay | HTTPS + **pinned** self-signed cert; Bearer token bound to logged-in user; kill-switch |
-| Agent ↔ debug stub | relayed debug-session messages | On-controller inter-device messaging; every message carries the session id and a per-session random key only the CLI and the stub hold |
+| CLI ↔ Agent (LAN) | `.c4z` uploads (RCE-capable); `driverforge run` relay | HTTPS + **pinned** self-signed cert; Bearer token bound to logged-in user; kill-switch |
+| Agent ↔ Remote4 stub | relayed `driverforge run` messages | On-controller inter-device messaging; every message carries the session id and a per-session random key only the CLI and the stub hold |
 | Agent ↔ Hydra | login + per-call tokens | TLS; **audience-narrowed** tokens; refresh token never sent as credential |
 | Agent ↔ MQTT broker | telemetry | JWT (narrowed to `aud=mqtt-broker`); broker host **locked at build time** |
 | Agent ↔ Graph | `registerDevice` | Bearer token (`aud=graph`, `scope=device:register`) |
