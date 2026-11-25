@@ -206,3 +206,23 @@ func EventsURL(orgSlug, projectSlug string) string {
 	}
 	return resolveAppURL() + "/" + orgSlug + "/events/?project=" + url.QueryEscape(projectSlug)
 }
+
+// SetupURL is the dev-tools page for a project, which shows its setup
+// instructions. from names what sent the user there (for example
+// "cli-starter-kit"), so the page can leave out steps that source has already
+// done. dir is the driver's directory as the user typed it, so the page can
+// show the `cd` into it. It points straight at the web app.
+//
+// Published contract: released CLI versions print this URL for as long as they
+// stay installed, so the org path, the project and dir parameters and the from values
+// can never be retired — only repointed.
+func SetupURL(orgSlug, projectSlug, from, dir string) string {
+	q := url.Values{"project": {projectSlug}}
+	if from != "" {
+		q.Set("from", from)
+	}
+	if dir != "" {
+		q.Set("dir", dir)
+	}
+	return resolveAppURL() + "/" + url.PathEscape(orgSlug) + "?" + q.Encode()
+}

@@ -47,6 +47,8 @@ type initOpts struct {
 
 	yes    bool
 	dryRun bool
+
+	fresh bool // the project was just scaffolded by `new`, so its tree is dirty by design
 }
 
 // validate rejects flags that contradict each other or answer a question
@@ -84,10 +86,10 @@ func (o initOpts) validate() error {
 	return nil
 }
 
-// missingAnswers lists the flags a run without a terminal still needs, so one
-// failure names them all instead of one per attempt. detected carries what
-// init found in the driver, for choosing the answers.
-func (o initOpts) missingAnswers(ctx context.Context, proj project.Project, entryRel string) (missing []string, detected map[string]string) {
+// missingFlags lists the flags a run without a terminal still needs, so one
+// failure names them all instead of one per attempt. canBranch is whether the
+// project could take a new git branch.
+func (o initOpts) missingFlags(canBranch bool) (missing []string) {
 	if o.project == "" && o.createProject == "" {
 		missing = append(missing, "--project or --create-project")
 	}
@@ -105,12 +107,19 @@ func (o initOpts) missingAnswers(ctx context.Context, proj project.Project, entr
 	if o.logger == "" && !o.noLogger {
 		missing = append(missing, "--logger or --no-logger")
 	}
-	if !o.noBranch && o.branch == "" && branchable(ctx, proj.Dir) {
+	if !o.noBranch && o.branch == "" && canBranch {
 		missing = append(missing, "--branch or --no-branch")
 	}
 	if !o.yes && !o.dryRun {
 		missing = append(missing, "--dry-run or --yes")
 	}
+	return missing
+}
+
+// missingAnswers is missingFlags for a project on disk. detected carries what
+// init found in the driver, for choosing the answers.
+func (o initOpts) missingAnswers(ctx context.Context, proj project.Project, entryRel string) (missing []string, detected map[string]string) {
+	missing = o.missingFlags(branchable(ctx, proj.Dir))
 	_, scheme := detectScheme(proj)
 	detected = map[string]string{"versioning": scheme}
 	if l := detectLogger(proj.SrcDir, entryRel); l != "" {

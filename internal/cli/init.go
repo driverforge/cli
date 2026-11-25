@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 
 	"github.com/driverforge/cli/internal/clierr"
 	"github.com/driverforge/cli/internal/driverforgeapi"
@@ -67,7 +68,7 @@ func initPreflight(ctx context.Context, out io.Writer, projectDir string, o init
 	if err := requireLogin(ctx); err != nil {
 		return project.Project{}, nil, err
 	}
-	if !o.dryRun {
+	if !o.dryRun && !o.fresh {
 		if err := requireCleanTree(ctx, proj.Dir, "driverforge init"); err != nil {
 			return project.Project{}, nil, err
 		}
@@ -298,17 +299,7 @@ func newInitCmd() *cobra.Command {
 	}
 	f := cmd.Flags()
 	f.StringVar(&o.c4zproj, "c4zproj", "", "path to the .c4zproj manifest (required when the project has multiple manifests)")
-	f.StringVar(&o.sdkDir, "sdk-dir", initdriver.DefaultSDKDir, "source-relative directory to install the Driverforge SDK")
-	f.StringVar(&o.project, "project", "", "link an existing project: <org-slug>/<project-slug>, or a project slug")
-	f.StringVar(&o.createProject, "create-project", "", "create a project with this name for the driver to report to")
-	f.StringVar(&o.org, "org", "", "the organization to create the project in (default: the active one), or to qualify a --project slug")
-	f.StringVar(&o.platform, "platform", "", "the new project's platform, by id or name (default: the only supported one)")
-	f.StringVar(&o.description, "description", "", "the new project's description")
-	f.StringVar(&o.versioning, "versioning", "", "how deploys bump <version>: date (YYYYMMDDNN) or integer")
-	f.BoolVar(&o.buildConfigs, "build-configs", false, "add config.lua and config.release.lua build configurations")
-	f.BoolVar(&o.noBuildConfigs, "no-build-configs", false, "don't add build configurations")
-	f.StringVar(&o.logger, "logger", "", "forward logs from this logger global (e.g. Log)")
-	f.BoolVar(&o.noLogger, "no-logger", false, "don't forward the driver's logs")
+	addInitAnswerFlags(f, &o)
 	f.StringVar(&o.branch, "branch", "", "create this git branch and commit the changes to it")
 	f.BoolVar(&o.noBranch, "no-branch", false, "write the changes to the current branch, uncommitted")
 	f.StringVar(&o.commitMsg, "commit-message", "", "the commit message on --branch (default \""+defaultInitCommitMessage+"\"; empty leaves the changes uncommitted)")
@@ -513,4 +504,21 @@ func (pp projectPlan) reviewProject() driverforgeapi.Project {
 		return *pp.existing
 	}
 	return driverforgeapi.Project{Name: pp.create.name, Slug: "(created on apply)"}
+}
+
+// addInitAnswerFlags registers the flags that answer init's questions about the
+// Driverforge project and the driver's shape. `new` shares them, so the two
+// commands can't drift apart.
+func addInitAnswerFlags(f *pflag.FlagSet, o *initOpts) {
+	f.StringVar(&o.sdkDir, "sdk-dir", initdriver.DefaultSDKDir, "source-relative directory to install the Driverforge SDK")
+	f.StringVar(&o.project, "project", "", "link an existing project: <org-slug>/<project-slug>, or a project slug")
+	f.StringVar(&o.createProject, "create-project", "", "create a project with this name for the driver to report to")
+	f.StringVar(&o.org, "org", "", "the organization to create the project in (default: the active one), or to qualify a --project slug")
+	f.StringVar(&o.platform, "platform", "", "the new project's platform, by id or name (default: the only supported one)")
+	f.StringVar(&o.description, "description", "", "the new project's description")
+	f.StringVar(&o.versioning, "versioning", "", "how deploys bump <version>: date (YYYYMMDDNN) or integer")
+	f.BoolVar(&o.buildConfigs, "build-configs", false, "add config.lua and config.release.lua build configurations")
+	f.BoolVar(&o.noBuildConfigs, "no-build-configs", false, "don't add build configurations")
+	f.StringVar(&o.logger, "logger", "", "forward logs from this logger global (e.g. Log)")
+	f.BoolVar(&o.noLogger, "no-logger", false, "don't forward the driver's logs")
 }
