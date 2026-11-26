@@ -239,3 +239,51 @@ func frontmatter(doc string) (string, bool) {
 	front, _, ok := strings.Cut(rest, "\n---\n")
 	return front, ok
 }
+
+// LinkResult is one skill's link into Claude Code's skills directory.
+type LinkResult struct {
+	// Path is the link, relative to the install root (for example
+	// ".claude/skills/<name>"); empty when there was no .claude to link into.
+	Path   string
+	Action Action
+}
+
+// LinkClaude makes the skill Install wrote into skillsDir (an .agents/skills
+// directory) visible to Claude Code, which reads only .claude/skills: a
+// relative symlink .claude/skills/<name> to the .agents copy, so that stays the
+// only real one. It does nothing when .claude doesn't exist beside .agents,
+// and never creates it. A link already pointing at the copy is unchanged;
+// anything else at that path is left alone unless force is set.
+func LinkClaude(skillsDir, name string, force bool) (LinkResult, error) {
+	installRoot := filepath.Dir(filepath.Dir(skillsDir))
+	if fi, err := os.Stat(filepath.Join(installRoot, ".claude")); err != nil || !fi.IsDir() {
+		return LinkResult{}, nil
+	}
+	rel := filepath.Join(".claude", "skills", name)
+	res := LinkResult{Path: filepath.ToSlash(rel), Action: Installed}
+	link := filepath.Join(installRoot, rel)
+	target := filepath.Join("..", "..", ".agents", "skills", name)
+
+	if fi, err := os.Lstat(link); err == nil {
+		if fi.Mode()&os.ModeSymlink != 0 {
+			if got, err := os.Readlink(link); err == nil && got == target {
+				res.Action = Unchanged
+				return res, nil
+			}
+		}
+		if !force {
+			return res, fmt.Errorf("%w: %s", ErrNotOwned, link)
+		}
+		if err := os.RemoveAll(link); err != nil {
+			return res, fmt.Errorf("skills: replacing %s: %w", link, err)
+		}
+		res.Action = Updated
+	}
+	if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+		return res, fmt.Errorf("skills: %w", err)
+	}
+	if err := os.Symlink(target, link); err != nil {
+		return res, fmt.Errorf("skills: linking %s: %w", link, err)
+	}
+	return res, nil
+}

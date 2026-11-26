@@ -154,3 +154,67 @@ func TestInstalledInListsOnlyWhatInstallWrote(t *testing.T) {
 		t.Fatalf("InstalledIn = %v, %v; want only %s", names, err, devCycle)
 	}
 }
+
+func installForLink(t *testing.T, withClaude bool) (root, skillsDir string) {
+	t.Helper()
+	root = t.TempDir()
+	if withClaude {
+		if err := os.Mkdir(filepath.Join(root, ".claude"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	skillsDir = filepath.Join(root, ".agents", "skills")
+	if _, err := Install(skillsDir, devCycle, "1.0.0", false); err != nil {
+		t.Fatal(err)
+	}
+	return root, skillsDir
+}
+
+func TestLinkClaudeCreatesRelativeLink(t *testing.T) {
+	root, dir := installForLink(t, true)
+	res, err := LinkClaude(dir, devCycle, false)
+	if err != nil || res.Action != Installed || res.Path != ".claude/skills/"+devCycle {
+		t.Fatalf("link = %+v, %v", res, err)
+	}
+	link := filepath.Join(root, ".claude", "skills", devCycle)
+	if got, _ := os.Readlink(link); got != filepath.Join("..", "..", ".agents", "skills", devCycle) {
+		t.Errorf("link target = %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(link, "SKILL.md")); err != nil {
+		t.Errorf("link doesn't resolve to the skill: %v", err)
+	}
+	if res, err = LinkClaude(dir, devCycle, false); err != nil || res.Action != Unchanged {
+		t.Fatalf("second link = %+v, %v; want unchanged", res, err)
+	}
+}
+
+func TestLinkClaudeNeverCreatesDotClaude(t *testing.T) {
+	root, dir := installForLink(t, false)
+	res, err := LinkClaude(dir, devCycle, false)
+	if err != nil || res.Path != "" {
+		t.Fatalf("link = %+v, %v; want nothing", res, err)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".claude")); !os.IsNotExist(err) {
+		t.Error(".claude was created")
+	}
+}
+
+func TestLinkClaudeRefusesAForeignDirectory(t *testing.T) {
+	root, dir := installForLink(t, true)
+	foreign := filepath.Join(root, ".claude", "skills", devCycle)
+	if err := os.MkdirAll(foreign, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LinkClaude(dir, devCycle, false); !errors.Is(err, ErrNotOwned) {
+		t.Fatalf("err = %v, want ErrNotOwned", err)
+	}
+	if fi, _ := os.Lstat(foreign); fi.Mode()&os.ModeSymlink != 0 {
+		t.Fatal("the foreign directory was replaced")
+	}
+	if res, err := LinkClaude(dir, devCycle, true); err != nil || res.Action != Updated {
+		t.Fatalf("forced link = %+v, %v", res, err)
+	}
+	if fi, _ := os.Lstat(foreign); fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatal("--force didn't replace it with a link")
+	}
+}

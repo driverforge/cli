@@ -74,6 +74,9 @@ type skillInstallOut struct {
 	Path   string `json:"path"`
 	Action string `json:"action"`
 	Files  int    `json:"files"`
+	// Linked is the Claude Code link to the skill, relative to the install
+	// root, when .claude exists there.
+	Linked string `json:"linked,omitempty"`
 }
 
 type skillsInstallOut struct {
@@ -95,6 +98,11 @@ func newSkillsInstallCmd() *cobra.Command {
 the current git repository, the skills directory coding agents read. Commit it,
 and everyone working on the driver gets the same skills. --global installs into
 ~/.agents/skills for every project instead; --path installs anywhere.
+
+Claude Code reads only .claude/skills, so when .claude exists at the same root
+(the repository, or ~ with --global) each skill is also linked there with a
+relative symlink to the .agents copy. driverforge never creates .claude, and
+--path installs don't link.
 
 Installing again replaces the copy a previous install wrote. A directory of
 the same name that driverforge didn't write is left alone unless --force.`,
@@ -142,14 +150,32 @@ func runSkillsInstall(cmd *cobra.Command, names []string, global bool, path stri
 		case err != nil:
 			return err
 		}
-		doc.Skills = append(doc.Skills, skillInstallOut{Name: res.Name, Path: res.Path, Action: string(res.Action), Files: res.Files})
+		entry := skillInstallOut{Name: res.Name, Path: res.Path, Action: string(res.Action), Files: res.Files}
 		if res.Action == skills.Unchanged {
 			fmt.Fprintf(out, "– %s is up to date in %s\n", res.Name, res.Path)
 		} else {
 			fmt.Fprintf(out, "✓ %s %s to %s\n", capitalise(string(res.Action)), res.Name, res.Path)
 		}
+		if path == "" {
+			if err := reportLink(out, &entry, root, name, force); err != nil {
+				return err
+			}
+		}
+		doc.Skills = append(doc.Skills, entry)
 	}
 	return emit(cmd, doc, noText)
+}
+
+// linkSkill links an installed skill into .claude/skills when .claude exists
+// beside the skills directory, translating a foreign occupant into a user error.
+func linkSkill(root, name string, force bool) (skills.LinkResult, error) {
+	link, err := skills.LinkClaude(root, name, force)
+	if errors.Is(err, skills.ErrNotOwned) {
+		return link, clierr.WithCode(clierr.User(
+			filepath.Join(filepath.Dir(filepath.Dir(root)), link.Path)+" already exists and isn't a link to "+root,
+			"Move it aside, or pass --force to replace it."), codeSkillConflict)
+	}
+	return link, err
 }
 
 // skillsDir is the directory skills install into: --path, ~/.agents/skills
@@ -221,7 +247,9 @@ func newSkillsUpdateCmd() *cobra.Command {
 versions this CLI ships. With no flag it updates them in both standard
 locations: .agents/skills at the root of the current git repository, and
 ~/.agents/skills. --global updates only ~/.agents/skills, and --path only the
-given directory. Run it after upgrading driverforge.`,
+given directory. Where .claude exists beside an updated copy it also keeps the
+Claude Code link in .claude/skills in place (--path doesn't link). Run it
+after upgrading driverforge.`,
 		Example: `  driverforge skills update
   driverforge skills update --global
   driverforge skills update --path ./tools/skills`,
@@ -261,20 +289,13 @@ func runSkillsUpdate(cmd *cobra.Command, names []string, global bool, path strin
 			if len(want) > 0 && !want[name] {
 				continue
 			}
-			res, err := skills.Install(root, name, buildinfo.Version, false)
-			if errors.Is(err, skills.ErrUnknown) {
-				fmt.Fprintf(out, "⚠ %s in %s isn't shipped by this CLI any more; remove it by hand\n", name, root)
-				continue
-			}
+			entry, ok, err := updateOne(out, root, name, path == "")
 			if err != nil {
 				return err
 			}
-			found[name] = true
-			doc.Skills = append(doc.Skills, skillInstallOut{Name: res.Name, Path: res.Path, Action: string(res.Action), Files: res.Files})
-			if res.Action == skills.Unchanged {
-				fmt.Fprintf(out, "– %s is up to date in %s\n", res.Name, res.Path)
-			} else {
-				fmt.Fprintf(out, "✓ Updated %s in %s\n", res.Name, res.Path)
+			if ok {
+				found[name] = true
+				doc.Skills = append(doc.Skills, entry)
 			}
 		}
 	}
@@ -295,6 +316,50 @@ func runSkillsUpdate(cmd *cobra.Command, names []string, global bool, path strin
 			with("searched", roots).asUserError()
 	}
 	return emit(cmd, doc, noText)
+}
+
+// updateOne refreshes one installed skill in root and, when link is set, its
+// Claude Code link. ok is false for a skill this CLI no longer ships.
+func updateOne(out io.Writer, root, name string, link bool) (entry skillInstallOut, ok bool, err error) {
+	res, err := skills.Install(root, name, buildinfo.Version, false)
+	if errors.Is(err, skills.ErrUnknown) {
+		fmt.Fprintf(out, "⚠ %s in %s isn't shipped by this CLI any more; remove it by hand\n", name, root)
+		return entry, false, nil
+	}
+	if err != nil {
+		return entry, false, err
+	}
+	entry = skillInstallOut{Name: res.Name, Path: res.Path, Action: string(res.Action), Files: res.Files}
+	if res.Action == skills.Unchanged {
+		fmt.Fprintf(out, "– %s is up to date in %s\n", res.Name, res.Path)
+	} else {
+		fmt.Fprintf(out, "✓ Updated %s in %s\n", res.Name, res.Path)
+	}
+	if !link {
+		return entry, true, nil
+	}
+	// A foreign occupant of the link path is a warning here: the copy itself
+	// updated, and update never forces.
+	var ue *clierr.UserError
+	if err := reportLink(out, &entry, root, name, false); errors.As(err, &ue) {
+		fmt.Fprintf(out, "⚠ %s\n", ue.Message)
+	} else if err != nil {
+		return entry, false, err
+	}
+	return entry, true, nil
+}
+
+// reportLink links the skill into .claude/skills and records and prints it.
+func reportLink(out io.Writer, entry *skillInstallOut, root, name string, force bool) error {
+	link, err := linkSkill(root, name, force)
+	if err != nil || link.Path == "" {
+		return err
+	}
+	entry.Linked = link.Path
+	if link.Action != skills.Unchanged {
+		fmt.Fprintf(out, "✓ Linked %s for Claude Code\n", link.Path)
+	}
+	return nil
 }
 
 // updateRoots are the skills directories update looks in: --path, or
